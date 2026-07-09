@@ -29,9 +29,18 @@ if (v.verdict === "avoid") throw new Error("don't pay this endpoint");
 { "mcpServers": { "pulsefeed": { "command": "npx", "args": ["-y", "pulsefeed-x402-mcp"] } } }
 ```
 
+## MCP server safety
+
+Beyond x402, PulseFeed applies the same independent-audit playbook to the **MCP server ecosystem** — because a bad MCP server can run arbitrary code on your machine the moment you install it, and most people connect one without ever checking.
+
+- 🔎 **[MCP Observatory](https://pulsefeed.dev/mcp)** — independent safety audit of the MCP server ecosystem (install-script / code-execution risk, abandonment, provenance, license, liveness)
+- 📊 **[State of MCP Security](https://pulsefeed.dev/mcp-report)** — daily report. Right now **~10% of ~800 audited MCP servers run an install script** (arbitrary code at `npm i`), and dozens ship no repo to review. (Install scripts aren't always malicious — native builds use them — but each is an unreviewed code-execution vector.)
+- ✅ Check any server free: `GET https://pulsefeed.dev/mcp/verify?package=<npm-name>` — verdict + flags before you connect it
+
 ## Links
 
 - 🌐 Live observatory: **[pulsefeed.dev/status](https://pulsefeed.dev/status)** — the live state of x402
+- 🧩 [MCP Observatory](https://pulsefeed.dev/mcp) · [State of MCP Security](https://pulsefeed.dev/mcp-report) — is that MCP server safe to install?
 - 📊 [State of x402 report](https://pulsefeed.dev/reports) · [Trust Score standard](https://pulsefeed.dev/trust-score) · [Change feed](https://pulsefeed.dev/changes)
 - 📖 [Methodology](https://pulsefeed.dev/methodology) · [OpenAPI](https://pulsefeed.dev/openapi.json) · [llms.txt](https://pulsefeed.dev/llms.txt)
 
