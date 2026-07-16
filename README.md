@@ -37,11 +37,17 @@ Beyond x402, PulseFeed applies the same independent-audit playbook to the **MCP 
 - 📊 **[State of MCP Security](https://pulsefeed.dev/mcp-report)** — daily report. Right now **~10% of ~800 audited MCP servers run an install script** (arbitrary code at `npm i`), and dozens ship no repo to review. (Install scripts aren't always malicious — native builds use them — but each is an unreviewed code-execution vector.)
 - ✅ Check any server free: `GET https://pulsefeed.dev/mcp/verify?package=<npm-name>` — verdict + flags before you connect it
 
+## Security Disclosures & Data API
+
+- 🚨 **[Security Disclosures](https://pulsefeed.dev/incidents)** — a live feed of real threats caught in the x402 economy (receiver hijacks, bait-and-switch pricing, honeypots, unverified receivers), each with **on-chain proof** you can verify yourself. Machine feed: [`/incidents.json`](https://pulsefeed.dev/incidents.json) · [RSS](https://pulsefeed.dev/incidents.rss)
+- 📦 **[Data API](https://pulsefeed.dev/data)** — the wholesale trust backbone for agentic commerce: every x402 service’s moat profile + every audited MCP server + ecosystem aggregates + live incidents in **one call** ($1 over x402). Free preview + full schema: [`/data.json`](https://pulsefeed.dev/data.json)
+
 ## Links
 
 - 🌐 Live observatory: **[pulsefeed.dev/status](https://pulsefeed.dev/status)** — the live state of x402
 - 🧩 [MCP Observatory](https://pulsefeed.dev/mcp) · [State of MCP Security](https://pulsefeed.dev/mcp-report) — is that MCP server safe to install?
 - 📊 [State of x402 report](https://pulsefeed.dev/reports) · [Trust Score standard](https://pulsefeed.dev/trust-score) · [Change feed](https://pulsefeed.dev/changes)
+- 🚨 [Security Disclosures](https://pulsefeed.dev/incidents) ([RSS](https://pulsefeed.dev/incidents.rss)) · 📦 [Data API](https://pulsefeed.dev/data) — cross-domain trust dataset in one call
 - 📖 [Methodology](https://pulsefeed.dev/methodology) · [OpenAPI](https://pulsefeed.dev/openapi.json) · [llms.txt](https://pulsefeed.dev/llms.txt)
 
 MIT © PulseFeed
