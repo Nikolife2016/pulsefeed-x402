@@ -3,9 +3,22 @@
   "version": "1.0.0",
   "description": "MCP server for the x402 agent-payment ecosystem: find working x402 services, verify endpoints before paying, and access PulseFeed real-time Base on-chain intelligence.",
   "type": "module",
-  "bin": { "pulsefeed-x402-mcp": "dist/index.js" },
-  "files": ["dist"],
-  "keywords": ["mcp", "x402", "agents", "onchain", "base", "crypto", "trust", "model-context-protocol"],
+  "bin": {
+    "pulsefeed-x402-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "mcp",
+    "x402",
+    "agents",
+    "onchain",
+    "base",
+    "crypto",
+    "trust",
+    "model-context-protocol"
+  ],
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
@@ -17,6 +30,7 @@
   },
   "devDependencies": {
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@types/node": "^20.14.0"
   }
 }
