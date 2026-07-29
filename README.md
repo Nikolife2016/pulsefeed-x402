@@ -1,5 +1,7 @@
 # PulseFeed — open-source x402 client tools
 
+[![pulsefeed-x402 MCP server](https://glama.ai/mcp/servers/Nikolife2016/pulsefeed-x402/badges/score.svg)](https://glama.ai/mcp/servers/Nikolife2016/pulsefeed-x402)
+
 Client-side, MIT-licensed tools for **[PulseFeed](https://pulsefeed.dev)** — the independent **trust & safety layer for the x402 agent-payment economy**.
 
 Before an AI agent pays an x402 endpoint, it should know whether that endpoint is safe to pay — **~70% of x402 endpoints are dead, invalid, or scams**, and only about half of what catalogs call "healthy" actually work. PulseFeed independently probes every x402 service, scans for scams (payTo hijack, bait-and-switch, honeypot), verifies the receiver on-chain, and publishes an open Trust Score.
