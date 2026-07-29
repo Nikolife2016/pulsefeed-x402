@@ -6,12 +6,39 @@
   "main": "dist/core.js",
   "types": "dist/core.d.ts",
   "exports": {
-    ".": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
-    "./vercel": { "types": "./dist/vercel.d.ts", "import": "./dist/vercel.js" },
-    "./langchain": { "types": "./dist/langchain.d.ts", "import": "./dist/langchain.js" }
+    ".": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./vercel": {
+      "types": "./dist/vercel.d.ts",
+      "import": "./dist/vercel.js"
+    },
+    "./langchain": {
+      "types": "./dist/langchain.d.ts",
+      "import": "./dist/langchain.js"
+    }
   },
-  "files": ["dist"],
-  "keywords": ["x402", "ai-agents", "agent-tools", "vercel-ai-sdk", "langchain", "trust", "safety", "payments", "base", "usdc", "mcp", "agentic-payments"],
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "x402",
+    "ai-agents",
+    "agent-tools",
+    "vercel-ai-sdk",
+    "langchain",
+    "trust",
+    "safety",
+    "payments",
+    "base",
+    "usdc",
+    "mcp",
+    "agentic-payments",
+    "security",
+    "verification",
+    "tools"
+  ],
   "scripts": {
     "build": "tsc",
     "prepare": "tsc"
@@ -22,8 +49,12 @@
     "@langchain/core": ">=0.2"
   },
   "peerDependenciesMeta": {
-    "ai": { "optional": true },
-    "@langchain/core": { "optional": true }
+    "ai": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "ai": "^4.0.0",
@@ -31,8 +62,17 @@
     "zod": "^3.23.0",
     "typescript": "^5.6.0"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT",
-  "homepage": "https://pulsefeed.dev/status",
-  "repository": { "type": "git", "url": "https://pulsefeed.dev" }
+  "homepage": "https://pulsefeed.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nikolife2016/pulsefeed-x402.git",
+    "directory": "ai-tools"
+  },
+  "bugs": {
+    "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues"
+  }
 }

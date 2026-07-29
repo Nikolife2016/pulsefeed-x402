@@ -7,7 +7,7 @@ import { z } from "zod";
 
 const BASE = process.env.PULSEFEED_URL || "https://pulsefeed.dev";
 
-const server = new McpServer({ name: "pulsefeed-x402", version: "1.0.0" });
+const server = new McpServer({ name: "pulsefeed-x402", version: "1.0.1" });
 
 server.registerTool(
   "x402_working_services",
@@ -48,6 +48,11 @@ server.registerTool(
     } catch (e: any) {
       out.error = e?.name === "AbortError" ? "timeout" : e?.message;
     }
+    // Дообогащение из непрерывного аудита PulseFeed: флаги скама/аномалий + trust score из кэша.
+    try {
+      const v: any = await (await fetch(`${BASE}/verify?endpoint=${encodeURIComponent(url)}`)).json();
+      if (v && v.known) { out.trustScore = v.score; out.registryVerdict = v.verdict; out.knownFlags = v.flags; out.receiverStability = v.receiverStability; out.uptimePct = v.uptimePct; }
+    } catch { /* кэш недоступен — живая проба выше уже дала вердикт */ }
     out.verdict = out.valid ? "live — valid x402, safe to consider paying" : "avoid — no valid x402 challenge";
     out.fullReputation = `${BASE}/trust?endpoint=${encodeURIComponent(url)} (paid: adds uptime + reputation history)`;
     return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
@@ -66,6 +71,54 @@ server.registerTool(
     const j = await r.json();
     return { content: [{ type: "text", text: JSON.stringify(j, null, 2) }] };
   },
+);
+
+
+// ---- Бесплатные data-тулы (обёртки публичных эндпоинтов PulseFeed) ----
+
+const textOf = (j: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(j, null, 2) }] });
+const getJson = async (path: string) => (await fetch(`${BASE}${path}`)).json();
+
+server.registerTool(
+  "x402_ecosystem_stats",
+  { description: "Live health of the entire x402 agent-payment ecosystem: how many endpoints are tracked/alive/dead, catalog accuracy audit (what share of 'healthy' listings actually work), scam-risk distribution and receiver-stability breakdown. Compact aggregates from PulseFeed's continuous independent audit. Free.", inputSchema: {} },
+  async () => { const j: any = await getJson("/status.json"); return textOf({ ecosystem: j.ecosystem, catalogAudit: j.catalogAudit, security: j.security ? { riskByLevel: j.security.riskByLevel, flagCounts: j.security.flagCounts } : null, receiverStability: j.receiverStability, receiverOnchain: j.receiverOnchain, analytics: j.analytics }); },
+);
+
+server.registerTool(
+  "x402_leaderboard",
+  { description: "Top x402 services ranked by PulseFeed Trust Score (0-100, open standard): the most reliable live agent-payment endpoints right now, with price and network. Use to pick a trustworthy service to pay. Free.", inputSchema: {} },
+  async () => { const j: any = await getJson("/status.json"); return textOf({ topHealthy: j.topHealthy, topProviders: j.topProviders, trustScoreSpec: `${BASE}/trust-score.json` }); },
+);
+
+server.registerTool(
+  "x402_incidents",
+  { description: "Live security incidents in the x402 economy caught by PulseFeed's detector: receiver hijacks (payTo swapped), bait-and-switch pricing, honeypots, unverified receivers, price gouging — each with an on-chain proof URL. Check before paying anything. Free.", inputSchema: {} },
+  async () => { const j: any = await getJson("/incidents.json?days=30&limit=50"); return textOf(j); },
+);
+
+server.registerTool(
+  "x402_changes",
+  { description: "What changed in the x402 ecosystem in the last 7 days: services that went dark, receiver (payTo) swaps — possible hijacks, price changes, recovered and newly-seen services. Derived from PulseFeed's compounding time-series (cannot be reconstructed after the fact). Free.", inputSchema: {} },
+  async () => { const j: any = await getJson("/changes.json?days=7&limit=100"); return textOf(j); },
+);
+
+server.registerTool(
+  "mcp_security_report",
+  { description: "State of MCP Security: how many audited MCP servers run an arbitrary install script on npm i, are abandoned, ship no repository or license — with day-over-day deltas and a sample of currently-flagged servers. From PulseFeed's daily MCP audit (950+ servers). Free.", inputSchema: {} },
+  async () => { const j: any = await getJson("/mcp-report.json"); return textOf({ current: j.current, deltas: j.deltas, riskySample: j.live ? j.live.riskySample : [] }); },
+);
+
+server.registerTool(
+  "mcp_check_server",
+  { description: "Before installing an MCP server, audit it by npm package name: does it run an install script (arbitrary code at npm i), is it abandoned, does it ship a repository/license, weekly downloads, provenance — verdict safe/caution/avoid. Free.", inputSchema: { package: z.string().describe("npm package name of the MCP server, e.g. @scope/name") } },
+  async ({ package: pkg }) => { const j: any = await getJson(`/mcp/verify?package=${encodeURIComponent(pkg)}`); return textOf(j); },
+);
+
+server.registerTool(
+  "x402_data_sample",
+  { description: "FREE sample of the PulseFeed Data API: top-10 live x402 services as FULL records (compounding payTo/price history, scam flags, on-chain receiver profile), top-10 MCP servers with full audit profile, and 3 live incidents. The full cross-domain dataset is GET /data/full ($1 via x402). Free.", inputSchema: {} },
+  async () => { const j: any = await getJson("/data/sample"); return textOf(j); },
 );
 
 await server.connect(new StdioServerTransport());

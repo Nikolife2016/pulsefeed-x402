@@ -5,15 +5,47 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "files": ["dist"],
-  "keywords": ["x402", "agents", "payments", "trust", "safety", "guard", "base", "usdc", "crypto", "ai-agents"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "x402",
+    "agents",
+    "payments",
+    "trust",
+    "safety",
+    "guard",
+    "base",
+    "usdc",
+    "crypto",
+    "ai-agents",
+    "security",
+    "verification",
+    "agentic-payments",
+    "fetch-wrapper",
+    "scam-protection"
+  ],
   "scripts": {
     "build": "tsc",
     "prepare": "tsc"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT",
-  "homepage": "https://pulsefeed.dev/status",
-  "repository": { "type": "git", "url": "https://pulsefeed.dev" }
+  "homepage": "https://pulsefeed.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nikolife2016/pulsefeed-x402.git",
+    "directory": "sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues"
+  }
 }

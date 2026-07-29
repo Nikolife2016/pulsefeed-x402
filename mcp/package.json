@@ -1,6 +1,6 @@
 {
   "name": "pulsefeed-x402-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for the x402 agent-payment ecosystem: find working x402 services, verify endpoints before paying, and access PulseFeed real-time Base on-chain intelligence.",
   "type": "module",
   "bin": {
@@ -17,7 +17,17 @@
     "base",
     "crypto",
     "trust",
-    "model-context-protocol"
+    "model-context-protocol",
+    "mcp-server",
+    "payments",
+    "agentic-payments",
+    "security",
+    "verification",
+    "ai-agents",
+    "claude",
+    "cursor",
+    "threat-intelligence",
+    "usdc"
   ],
   "scripts": {
     "build": "tsc",
@@ -32,5 +42,15 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "@types/node": "^20.14.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nikolife2016/pulsefeed-x402.git",
+    "directory": "mcp"
+  },
+  "homepage": "https://pulsefeed.dev",
+  "bugs": {
+    "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues"
+  },
+  "mcpName": "io.github.nikolife2016/pulsefeed-x402"
 }
