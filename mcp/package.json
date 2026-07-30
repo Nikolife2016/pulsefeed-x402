@@ -1,6 +1,6 @@
 {
   "name": "pulsefeed-x402-mcp",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "MCP server for the x402 agent-payment ecosystem: find working x402 services, verify endpoints before paying, and access PulseFeed real-time Base on-chain intelligence.",
   "type": "module",
   "bin": {
