@@ -6,17 +6,23 @@
     "url": "https://github.com/Nikolife2016/pulsefeed-x402",
     "source": "github"
   },
-  "version": "1.0.3",
+  "version": "1.0.4",
   "websiteUrl": "https://pulsefeed.dev",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "pulsefeed-x402-mcp",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "transport": {
         "type": "stdio"
       }
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://pulsefeed.dev/mcp-server"
     }
   ]
 }
