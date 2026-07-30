@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.nikolife2016/pulsefeed-x402",
-  "description": "Verify x402 payment endpoints before an AI agent pays: liveness, scam/anomaly scan (payTo hijack, bait-and-switch, honeypot), on-chain receiver verification, trust scores; plus MCP server security audit. 10 free tools.",
+  "description": "Verify x402 payment endpoints before an AI agent pays: scam scan, on-chain checks, trust scores.",
   "repository": {
     "url": "https://github.com/Nikolife2016/pulsefeed-x402",
     "source": "github"
@@ -14,7 +14,9 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "pulsefeed-x402-mcp",
       "version": "1.0.1",
-      "transport": { "type": "stdio" }
+      "transport": {
+        "type": "stdio"
+      }
     }
   ]
 }

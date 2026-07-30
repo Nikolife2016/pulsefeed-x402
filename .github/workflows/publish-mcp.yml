@@ -1,8 +1,10 @@
-# Публикация по тегу v*: npm-пакет (NPM_TOKEN) + официальный MCP Registry (GitHub OIDC).
+# Публикация: npm-пакет (NPM_TOKEN, скип если версия уже в npm) + официальный MCP Registry (GitHub OIDC).
+# Триггеры: тег v* ИЛИ ручной запуск (workflow_dispatch).
 name: Publish MCP (npm + official registry)
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 permissions:
   id-token: write   # OIDC для mcp-publisher login github-oidc
   contents: read
@@ -15,11 +17,16 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-      - name: Publish npm package (mcp)
+      - name: Publish npm package (mcp, skip if version exists)
         working-directory: mcp
         run: |
-          npm install
-          npm publish
+          V=$(node -p "require('./package.json').version")
+          if npm view "pulsefeed-x402-mcp@$V" version >/dev/null 2>&1; then
+            echo "pulsefeed-x402-mcp@$V already on npm — skip publish"
+          else
+            npm install
+            npm publish
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Install mcp-publisher
