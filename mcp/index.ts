@@ -7,7 +7,7 @@ import { z } from "zod";
 
 const BASE = process.env.PULSEFEED_URL || "https://pulsefeed.dev";
 
-const server = new McpServer({ name: "pulsefeed-x402", version: "1.0.1" });
+const server = new McpServer({ name: "pulsefeed-x402", version: "1.0.2" });
 
 server.registerTool(
   "x402_working_services",

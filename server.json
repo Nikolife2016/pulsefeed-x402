@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.nikolife2016/pulsefeed-x402",
+  "name": "io.github.Nikolife2016/pulsefeed-x402",
   "description": "Verify x402 payment endpoints before an AI agent pays: scam scan, on-chain checks, trust scores.",
   "repository": {
     "url": "https://github.com/Nikolife2016/pulsefeed-x402",
     "source": "github"
   },
-  "version": "1.0.1",
+  "version": "1.0.2",
   "websiteUrl": "https://pulsefeed.dev",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "pulsefeed-x402-mcp",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "transport": {
         "type": "stdio"
       }
