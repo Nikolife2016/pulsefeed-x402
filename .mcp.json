@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "pulsefeed": {
+      "type": "http",
+      "url": "https://pulsefeed.dev/mcp-server"
+    }
+  }
+}
