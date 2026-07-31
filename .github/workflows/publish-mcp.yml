@@ -1,4 +1,15 @@
-# Публикация: npm-пакет (NPM_TOKEN, скип если версия уже в npm) + официальный MCP Registry (GitHub OIDC).
+# Публикация: npm-пакеты + официальный MCP Registry.
+#
+# АУТЕНТИФИКАЦИЯ В NPM — OIDC (Trusted Publishing), токен не нужен. Причина не в удобстве:
+# гранулярный NPM_TOKEN истекает 28.10.2026, а с января 2027 токены вообще теряют право
+# публикации. OIDC снимает обе даты сразу и не требует хранить секрет.
+# Требования npm: CLI >= 11.5.1, Node >= 22.14, permissions.id-token: write, и настроенный
+# на npmjs.com доверенный издатель для КАЖДОГО пакета (репозиторий + имя этого файла).
+#
+# ⚠️ Первую версию НОВОГО пакета через OIDC опубликовать нельзя — доверенный издатель
+# настраивается только у существующего пакета (защита от захвата имён, npm/cli#8544).
+# Бутстрап делается один раз вручную, дальше всё идёт по OIDC.
+#
 # Триггеры: тег v* ИЛИ ручной запуск (workflow_dispatch).
 name: Publish MCP (npm + official registry)
 on:
@@ -15,8 +26,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"          # OIDC требует Node >= 22.14
           registry-url: "https://registry.npmjs.org"
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@latest   # OIDC требует npm CLI >= 11.5.1
+          npm --version
       - name: Publish npm package (mcp, skip if version exists)
         working-directory: mcp
         run: |
@@ -27,12 +42,11 @@ jobs:
             npm install
             npm publish
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish x402-lint (skip if version exists)
-        # Не блокирует остальной релиз: пока токен не даёт создавать новый пакет, шаг падает
-        # с 403, и без continue-on-error он утаскивал бы за собой публикацию в реестр MCP.
-        continue-on-error: true
+        # Пока доверенный издатель для x402-lint не настроен, шаг падает и это ВИДНО.
+        # Убирать шум через continue-on-error нельзя: молча провалившаяся публикация —
+        # ровно тот класс «сторож без датчика», что уже ловили сегодня на watchdog.
+        continue-on-error: ${{ vars.LINT_BOOTSTRAPPED != 'true' }}
         working-directory: lint
         run: |
           V=$(node -p "require('./package.json').version")
@@ -41,8 +55,6 @@ jobs:
           else
             npm publish --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install mcp-publisher
         run: |
