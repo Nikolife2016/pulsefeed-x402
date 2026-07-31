@@ -1,0 +1,122 @@
+# Внешний сторож. Единственный контур оповещения, НЕ зависящий от включённого ноутбука:
+# крон GitHub Actions ходит на живой сервис со стороны и заводит issue при поломке.
+# Issue → письмо на почту владельца, то есть уведомление доходит без всяких подписок и
+# без сторонних сервисов, которым надо отдавать email и заводить аккаунт.
+#
+# Что сторожит:
+#   1. сервис жив и данные не протухли (/health отдаёт 503 сам, если краул встал);
+#   2. платный контур: 402-челлендж собирается и несёт корректные платёжные требования;
+#   3. TLS: писем от Let's Encrypt больше не рассылают, поэтому срок смотрим сами;
+#   4. домен: RDAP-дата истечения и статусы (в июле 2026 нас уже роняла ICANN-блокировка);
+#   5. кошелёк-покупатель: пустеет односторонне, пополнить автономно нельзя.
+name: watchdog
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"     # каждые 20 минут
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe the live service
+        id: probe
+        run: |
+          set +e
+          FAIL=""
+
+          # ── 1. Здоровье сервиса и свежесть данных
+          BODY=$(curl -s --max-time 25 -w '\n%{http_code}' https://pulsefeed.dev/health)
+          CODE=$(printf '%s' "$BODY" | tail -1)
+          JSON=$(printf '%s' "$BODY" | sed '$d')
+          if [ "$CODE" != "200" ]; then
+            FAIL="$FAIL\n- /health returned HTTP $CODE (body: $(printf '%s' "$JSON" | head -c 300))"
+          else
+            STATUS=$(printf '%s' "$JSON" | grep -o '"status":"[a-z]*"' | cut -d'"' -f4)
+            AGE=$(printf '%s' "$JSON" | grep -o '"dataAgeHours":[0-9.]*' | cut -d: -f2)
+            [ "$STATUS" = "up" ] || FAIL="$FAIL\n- /health status is \"$STATUS\", expected \"up\""
+            awk -v a="${AGE:-999}" 'BEGIN{exit !(a>30)}' && FAIL="$FAIL\n- crawl data is ${AGE}h old (cron runs daily; over 30h means the pipeline stopped)"
+          fi
+
+          # ── 2. Платный контур: 402 должен собираться и нести требования
+          P=$(curl -s --max-time 25 -w '\n%{http_code}' https://pulsefeed.dev/trust)
+          PCODE=$(printf '%s' "$P" | tail -1)
+          PBODY=$(printf '%s' "$P" | sed '$d')
+          if [ "$PCODE" != "402" ]; then
+            FAIL="$FAIL\n- paid route /trust returned HTTP $PCODE, expected 402 — the payment challenge is not being issued"
+          elif ! printf '%s' "$PBODY" | grep -q '"payTo"'; then
+            FAIL="$FAIL\n- the 402 challenge on /trust has no payTo — agents cannot pay"
+          fi
+
+          # ── 3. TLS. Порог 21 день: с 10.02.2027 Let's Encrypt переходит на 64-дневные
+          # сертификаты, и окно на исправление сбоя продления сжимается примерно до этого.
+          END=$(echo | openssl s_client -servername pulsefeed.dev -connect pulsefeed.dev:443 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+          if [ -n "$END" ]; then
+            LEFT=$(( ( $(date -d "$END" +%s) - $(date +%s) ) / 86400 ))
+            echo "tls_days=$LEFT" >> "$GITHUB_OUTPUT"
+            [ "$LEFT" -lt 21 ] && FAIL="$FAIL\n- TLS certificate expires in $LEFT days (auto-renewal appears stuck; no email is sent by the CA)"
+          else
+            FAIL="$FAIL\n- could not read the TLS certificate"
+          fi
+
+          # ── 4. Домен: дата истечения и статусы реестра
+          RD=$(curl -s --max-time 25 -H 'accept: application/rdap+json' https://rdap.nic.google/domain/pulsefeed.dev)
+          EXP=$(printf '%s' "$RD" | grep -o '"eventAction":"expiration","eventDate":"[^"]*"' | cut -d'"' -f8)
+          if [ -n "$EXP" ]; then
+            DLEFT=$(( ( $(date -d "$EXP" +%s) - $(date +%s) ) / 86400 ))
+            echo "domain_days=$DLEFT" >> "$GITHUB_OUTPUT"
+            [ "$DLEFT" -lt 45 ] && FAIL="$FAIL\n- domain expires in $DLEFT days ($EXP) — renew it"
+          fi
+          printf '%s' "$RD" | grep -qi 'serverHold\|clientHold\|redemptionPeriod\|pendingDelete' \
+            && FAIL="$FAIL\n- the registry reports a hold/redemption status on the domain (this is what took the site down on 2026-07-21)"
+
+          # ── 5. Кошелёк-покупатель: расходуется односторонне, пополняется только вручную
+          BAL=$(curl -s --max-time 25 -X POST https://mainnet.base.org -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","data":"0x70a082310000000000000000000000003a4c3aB6EbF872F500010C81Ce2d75EC0Da37305"},"latest"]}' \
+            | grep -o '"result":"0x[0-9a-f]*"' | cut -d'"' -f4)
+          if [ -n "$BAL" ]; then
+            USDC=$(python3 -c "print(f'{int('$BAL',16)/1e6:.2f}')")
+            echo "wallet_usdc=$USDC" >> "$GITHUB_OUTPUT"
+            python3 -c "import sys; sys.exit(0 if float('$USDC') < 3 else 1)" \
+              && FAIL="$FAIL\n- buyer wallet is down to $USDC USDC; below ~1.21 USDC the monthly keepalive stops and Bazaar stops re-indexing our listings"
+          fi
+
+          if [ -n "$FAIL" ]; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            { echo "detail<<EOF"; printf '%b' "$FAIL"; echo; echo "EOF"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Open or update an alert issue
+        if: steps.probe.outputs.failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="watchdog: pulsefeed.dev needs attention"
+          BODY=$(printf 'Automated external check failed at %s UTC.\n%b\n\n---\nTLS days left: %s · domain days left: %s · buyer wallet: %s USDC\n\nRe-run: Actions → watchdog → Run workflow. This issue is updated in place while the condition persists and closed automatically once every check passes.\n' \
+            "$(date -u +%FT%TZ)" "${{ steps.probe.outputs.detail }}" "${{ steps.probe.outputs.tls_days }}" "${{ steps.probe.outputs.domain_days }}" "${{ steps.probe.outputs.wallet_usdc }}")
+          EXISTING=$(gh issue list --state open --label watchdog --limit 1 --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh label create watchdog --color B60205 --description "Automated external health check" 2>/dev/null || true
+            gh issue create --title "$TITLE" --label watchdog --body "$BODY"
+          fi
+
+      - name: Close the alert once everything passes
+        if: steps.probe.outputs.failed == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          N=$(gh issue list --state open --label watchdog --limit 1 --json number --jq '.[0].number')
+          if [ -n "$N" ]; then
+            gh issue comment "$N" --body "Recovered — all checks passed at $(date -u +%FT%TZ) UTC. TLS ${{ steps.probe.outputs.tls_days }}d, domain ${{ steps.probe.outputs.domain_days }}d, wallet ${{ steps.probe.outputs.wallet_usdc }} USDC."
+            gh issue close "$N"
+          fi
