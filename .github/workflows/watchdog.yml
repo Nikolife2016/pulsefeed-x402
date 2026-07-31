@@ -15,6 +15,11 @@ on:
   schedule:
     - cron: "*/20 * * * *"     # каждые 20 минут
   workflow_dispatch:
+    inputs:
+      force_fail:
+        description: "Simulate a failure to exercise the alert path without breaking anything"
+        type: boolean
+        default: false
 
 permissions:
   issues: write
@@ -29,6 +34,9 @@ jobs:
         run: |
           set +e
           FAIL=""
+          # Ручная проверка самого механизма оповещения: прогоняет ровно ту ветку, что
+          # сработает при реальной аварии, ничего при этом не ломая.
+          [ "${{ inputs.force_fail }}" = "true" ] && FAIL="$FAIL\n- SIMULATED failure (manual run with force_fail; nothing is actually wrong)"
 
           # ── 1. Здоровье сервиса и свежесть данных
           BODY=$(curl -s --max-time 25 -w '\n%{http_code}' https://pulsefeed.dev/health)
