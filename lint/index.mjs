@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// x402-lint — is this endpoint actually payable?
+// x402-payable — is this endpoint actually payable?
 //
 // "Returned a 402" and "is a payable product" are not the same claim. This runs the checks
 // that separate them, against any URL, with no dependencies and no calls to any service of
@@ -177,15 +177,25 @@ export async function lint(url, { timeoutMs = 15000 } = {}) {
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop());
+// Определяем "запущен напрямую" честно, через realpath. Сравнение имён файлов ломалось под
+// npx: он подставляет свой шим (node_modules/.bin/x402-payable), имя которого не совпадает с
+// index.mjs, и CLI молча не запускался — пакет публиковался «рабочим», а на деле печатал
+// пустоту. Шим — симлинк на этот файл, поэтому realpath их сводит.
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; }
+  catch { return false; }
+})();
 if (isMain) {
   const args = process.argv.slice(2);
   const json = args.includes("--json");
   const url = args.find(a => !a.startsWith("--"));
   if (!url) {
-    console.error(`x402-lint — is this endpoint actually payable?
+    console.error(`x402-payable — is this endpoint actually payable?
 
-  npx x402-lint <url> [--json]
+  npx x402-payable <url> [--json]
 
 Checks the things that make an endpoint return a valid 402 while still not being something
 you can buy: v1/v2 challenge location, body/header disagreement, payment scheme against the

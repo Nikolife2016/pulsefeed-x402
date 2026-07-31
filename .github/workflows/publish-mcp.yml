@@ -42,16 +42,16 @@ jobs:
             npm install
             npm publish
           fi
-      - name: Publish x402-lint (skip if version exists)
-        # Пока доверенный издатель для x402-lint не настроен, шаг падает и это ВИДНО.
+      - name: Publish x402-payable (skip if version exists)
+        # Пока доверенный издатель для x402-payable не настроен, шаг падает и это ВИДНО.
         # Убирать шум через continue-on-error нельзя: молча провалившаяся публикация —
         # ровно тот класс «сторож без датчика», что уже ловили сегодня на watchdog.
         continue-on-error: ${{ vars.LINT_BOOTSTRAPPED != 'true' }}
         working-directory: lint
         run: |
           V=$(node -p "require('./package.json').version")
-          if npm view "x402-lint@$V" version >/dev/null 2>&1; then
-            echo "x402-lint@$V already on npm — skip publish"
+          if npm view "x402-payable@$V" version >/dev/null 2>&1; then
+            echo "x402-payable@$V already on npm — skip publish"
           else
             npm publish --access public
           fi

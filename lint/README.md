@@ -1,11 +1,11 @@
-# x402-lint
+# x402-payable
 
 **Is this x402 endpoint actually payable?**
 
 `Returned a 402` and `is a payable product` are not the same claim. This checks the difference.
 
 ```bash
-npx x402-lint https://api.example.com/v1/data
+npx x402-payable https://api.example.com/v1/data
 ```
 
 ```
@@ -51,7 +51,7 @@ read as market movement.
 ## In CI
 
 ```yaml
-- run: npx x402-lint https://api.example.com/v1/data
+- run: npx x402-payable https://api.example.com/v1/data
 ```
 
 Exit codes: `0` payable · `1` not payable · `2` undetermined (unreachable/timeout) · `3` usage.
@@ -59,7 +59,7 @@ Exit codes: `0` payable · `1` not payable · `2` undetermined (unreachable/time
 ## As a library
 
 ```js
-import { lint } from "x402-lint";
+import { lint } from "x402-payable";
 const r = await lint("https://api.example.com/v1/data");
 // { url, verdict: "payable" | "not-payable" | "unknown", offers, checks: [{ id, ok, level, msg }] }
 ```
