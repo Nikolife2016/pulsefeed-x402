@@ -30,6 +30,9 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish x402-lint (skip if version exists)
+        # Не блокирует остальной релиз: пока токен не даёт создавать новый пакет, шаг падает
+        # с 403, и без continue-on-error он утаскивал бы за собой публикацию в реестр MCP.
+        continue-on-error: true
         working-directory: lint
         run: |
           V=$(node -p "require('./package.json').version")
