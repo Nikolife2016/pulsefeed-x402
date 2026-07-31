@@ -73,8 +73,14 @@ jobs:
           fi
 
           # ── 4. Домен: дата истечения и статусы реестра
-          RD=$(curl -s --max-time 25 -H 'accept: application/rdap+json' https://rdap.nic.google/domain/pulsefeed.dev)
-          EXP=$(printf '%s' "$RD" | grep -o '"eventAction":"expiration","eventDate":"[^"]*"' | cut -d'"' -f8)
+          # rdap.nic.google не отвечает (HTTP 000) — проверено 31.07.2026. Идём через
+          # rdap.org, он проксирует к авторитетному серверу зоны и следует редиректам.
+          # Если ответа нет вообще — это тоже повод для тревоги: молча пропускать
+          # проверку срока домена нельзя, именно домен нас уже ронял.
+          RD=$(curl -sL --max-time 25 -H 'accept: application/rdap+json' https://rdap.org/domain/pulsefeed.dev)
+          EXP=$(printf '%s' "$RD" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((e['eventDate'] for e in d.get('events',[]) if e.get('eventAction')=='expiration'),''))" 2>/dev/null)
+          [ -z "$EXP" ] && FAIL="$FAIL\n- could not read the domain expiry from RDAP; the expiry check did not run"
+          EXP=${EXP%%.*}Z
           if [ -n "$EXP" ]; then
             DLEFT=$(( ( $(date -d "$EXP" +%s) - $(date +%s) ) / 86400 ))
             echo "domain_days=$DLEFT" >> "$GITHUB_OUTPUT"
