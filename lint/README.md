@@ -54,6 +54,8 @@ read as market movement.
 - run: npx x402-payable https://api.example.com/v1/data
 ```
 
+`--version` prints the checker version, which is worth logging in CI.
+
 Exit codes: `0` payable · `1` not payable · `2` undetermined (unreachable/timeout) · `3` usage.
 
 ## As a library

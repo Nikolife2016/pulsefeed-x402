@@ -191,6 +191,14 @@ const isMain = (() => {
 if (isMain) {
   const args = process.argv.slice(2);
   const json = args.includes("--json");
+  // В логах CI должно быть видно, какой версией получен вердикт — иначе непонятно, чему
+  // верить, когда проверка меняется.
+  if (args.includes("--version") || args.includes("-v")) {
+    const { readFileSync } = await import("node:fs");
+    const here = new URL("./package.json", import.meta.url);
+    console.log(JSON.parse(readFileSync(here, "utf8")).version);
+    process.exit(0);
+  }
   const url = args.find(a => !a.startsWith("--"));
   if (!url) {
     console.error(`x402-payable — is this endpoint actually payable?

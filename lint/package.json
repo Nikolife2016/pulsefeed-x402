@@ -1,6 +1,6 @@
 {
   "name": "x402-payable",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Is this x402 endpoint actually payable? Checks a URL against the traps that let an endpoint return a valid 402 while still not being something you can buy. Zero dependencies, no account, no third-party calls.",
   "type": "module",
   "bin": {
