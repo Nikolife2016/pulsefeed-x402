@@ -98,25 +98,27 @@ jobs:
         if: steps.probe.outputs.failed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           TITLE="watchdog: pulsefeed.dev needs attention"
           BODY=$(printf 'Automated external check failed at %s UTC.\n%b\n\n---\nTLS days left: %s · domain days left: %s · buyer wallet: %s USDC\n\nRe-run: Actions → watchdog → Run workflow. This issue is updated in place while the condition persists and closed automatically once every check passes.\n' \
             "$(date -u +%FT%TZ)" "${{ steps.probe.outputs.detail }}" "${{ steps.probe.outputs.tls_days }}" "${{ steps.probe.outputs.domain_days }}" "${{ steps.probe.outputs.wallet_usdc }}")
-          EXISTING=$(gh issue list --state open --label watchdog --limit 1 --json number --jq '.[0].number')
+          EXISTING=$(gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number')
           if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
+            gh issue comment -R "$REPO" "$EXISTING" --body "$BODY"
           else
-            gh label create watchdog --color B60205 --description "Automated external health check" 2>/dev/null || true
-            gh issue create --title "$TITLE" --label watchdog --body "$BODY"
+            gh label create -R "$REPO" watchdog --color B60205 --description "Automated external health check" 2>/dev/null || true
+            gh issue create -R "$REPO" --title "$TITLE" --label watchdog --body "$BODY"
           fi
 
       - name: Close the alert once everything passes
         if: steps.probe.outputs.failed == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          N=$(gh issue list --state open --label watchdog --limit 1 --json number --jq '.[0].number')
+          N=$(gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number')
           if [ -n "$N" ]; then
-            gh issue comment "$N" --body "Recovered — all checks passed at $(date -u +%FT%TZ) UTC. TLS ${{ steps.probe.outputs.tls_days }}d, domain ${{ steps.probe.outputs.domain_days }}d, wallet ${{ steps.probe.outputs.wallet_usdc }} USDC."
-            gh issue close "$N"
+            gh issue comment -R "$REPO" "$N" --body "Recovered — all checks passed at $(date -u +%FT%TZ) UTC. TLS ${{ steps.probe.outputs.tls_days }}d, domain ${{ steps.probe.outputs.domain_days }}d, wallet ${{ steps.probe.outputs.wallet_usdc }} USDC."
+            gh issue close -R "$REPO" "$N"
           fi
