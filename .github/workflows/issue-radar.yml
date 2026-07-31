@@ -67,13 +67,27 @@ jobs:
               if (seen.includes(o.u)) continue;                        // уже приносили
               const text = (o.t + " " + (o.b||"")).toLowerCase().slice(0, 4000);
               // Чем именно мы полезны в этой ветке — если ничем, не приносим вовсе.
+              // Тема должна быть про x402, иначе это чужой 402 из другой оперы (биллинг,
+              // квоты API). Ловили MiQi#528 про нехватку баланса и swap-риски — не наше.
+              const aboutX402 = /x402|payment-?required|\bpayto\b|facilitator|bazaar/.test(text);
+              if (!aboutX402) continue;
+              // Каждый угол требует ПРЯМОГО признака, а не косвенного. Слабое совпадение —
+              // это ложное срабатывание, а обещать помощь там, где её нет, хуже молчания.
               const angles = [];
-              if (/payment-required|challenge.*(header|body)|header.*challenge|v2/.test(text)) angles.push("v2 переносит челлендж в заголовок PAYMENT-REQUIRED — тело перестало быть источником");
-              if (/(dead|unreachable|invalid|not detected|no accepts|empty body)/.test(text)) angles.push("проверка живости: npx x402-payable <url> покажет, где именно ломается");
-              if (/\bupto\b|auth-capture|batch-settlement|scheme/.test(text)) angles.push("схемы: в спеке их четыре, и у upto/auth-capture amount — потолок, а не цена");
-              if (/payto|recipient|receiver/.test(text)) angles.push("смена получателя и адреса-двойники — у нас есть история наблюдений");
-              if (/testnet|sepolia|devnet/.test(text)) angles.push("тестнет с ценой в долларах — отдельная проверка");
-              if (/decimals|usdc.*amount|amount.*usdc/.test(text)) angles.push("decimals по сетям: USDC 6 везде, кроме BSC (18)");
+              if (/payment-?required|challenge[^.]{0,40}(header|body)|(header|body)[^.]{0,40}challenge/.test(text))
+                angles.push("v2 держит челлендж в заголовке PAYMENT-REQUIRED, тело — деталь реализации; у нас есть замеры по 5.6k эндпоинтов");
+              if (/(returns?|returning|stopped)[^.]{0,30}402|no accepts|empty body|\b(dead|unreachable|stale)\b[^.]{0,30}(endpoint|resource|service)/.test(text))
+                angles.push("живость: npx x402-payable <url> покажет, на чём именно ломается, плюс наша история наблюдений");
+              if (/\bupto\b|auth-?capture|batch-?settlement/.test(text))
+                angles.push("у upto/auth-capture amount — потолок авторизации, а не цена вызова; мы на этом ошиблись и исправились");
+              if (/\bpayto\b/.test(text))
+                angles.push("смены получателя и адреса-двойники — есть хронология по каждому эндпоинту");
+              if (/\b(testnet|sepolia|devnet)\b/.test(text))
+                angles.push("тестнет, выставленный как боевой сервис с ценой в долларах — 29 таких в индексе");
+              if (/\bdecimals\b/.test(text))
+                angles.push("decimals по сетям: USDC 6 везде, кроме BSC (18)");
+              if (/description[^.]{0,40}(long|length|limit)|too long/.test(text))
+                angles.push("длина description ломает оплату молча: замерено 436 симв. — ок, 588 и 646 — «Failed to verify payment: 400»");
               if (!angles.length) continue;
               rows.set(o.u, `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  чем полезны: ${angles.slice(0,2).join("; ")}`);
             }
