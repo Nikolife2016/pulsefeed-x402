@@ -1,0 +1,95 @@
+# Радар вопросов. Вещать в пустоту бесполезно — а вот ответить по делу в чужой ветке
+# работает. Раз в сутки собирает свежие issues, на которые у нас есть КОНКРЕТНЫЙ ответ
+# (данные аудита или npx x402-payable), и складывает в одну накопительную issue.
+#
+# Ловим не «упоминания x402», а признаки вопроса, где мы полезны: почему эндпоинт считается
+# мёртвым, где искать платёжные требования, что за схема, тестнет ли это, сменился ли payTo.
+# Мусор (спам-фабрики, зеркала, автогенерация) отсекается по списку.
+name: issue-radar
+
+on:
+  schedule:
+    - cron: "17 9 * * *"     # раз в сутки
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find questions we can actually answer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SINCE=$(date -u -d '3 days ago' +%Y-%m-%d)
+
+          # Репозиторий спецификации — читаем целиком: там ~2-3 issue в день, и это ровно та
+          # аудитория, для которой мы что-то значим.
+          gh api -X GET search/issues \
+            -f q="repo:x402-foundation/x402 is:issue is:open created:>$SINCE" \
+            -f per_page=30 --jq '.items[] | {n:.number, r:"x402-foundation/x402", t:.title, u:.html_url, b:(.body // "")}' > /tmp/raw.jsonl || true
+
+          # Широкий поиск по признакам вопроса, а не по слову «x402».
+          for Q in \
+            '"PAYMENT-REQUIRED" is:issue is:open' \
+            'x402 "402" (dead OR unreachable OR invalid OR "not detected") is:issue is:open' \
+            'x402 (payTo OR "pay to") (changed OR verify OR check) is:issue is:open' \
+            'x402 (scheme OR "upto" OR "auth-capture") is:issue is:open' ; do
+            gh api -X GET search/issues -f q="$Q created:>$SINCE" -f per_page=20 \
+              --jq '.items[] | {n:.number, r:(.repository_url|split("/")|.[-2:]|join("/")), t:.title, u:.html_url, b:(.body // "")}' >> /tmp/raw.jsonl || true
+          done
+
+          # Отсев шума и уже виденного.
+          gh issue list -R "$REPO" --state all --label radar --limit 1 --json number --jq '.[0].number // empty' > /tmp/tracker || true
+          TRACKER=$(cat /tmp/tracker)
+          if [ -n "$TRACKER" ]; then
+            { gh issue view "$TRACKER" -R "$REPO" --json body --jq '.body';
+              gh issue view "$TRACKER" -R "$REPO" --json comments --jq '.comments[].body'; } > /tmp/seen.txt 2>/dev/null || : > /tmp/seen.txt
+          else
+            : > /tmp/seen.txt
+          fi
+
+          node -e '
+            const fs = require("fs");
+            const seen = fs.existsSync("/tmp/seen.txt") ? fs.readFileSync("/tmp/seen.txt","utf8") : "";
+            // Репозитории-шумелки: спам-фабрики и автогенерируемые ленты. Список растёт по факту.
+            const NOISE = /rsi-eaf|social-feed|^bot-|awesome-stars|-mirror$/i;
+            const rows = new Map();
+            for (const line of fs.readFileSync("/tmp/raw.jsonl","utf8").split("\n")) {
+              if (!line.trim()) continue;
+              let o; try { o = JSON.parse(line); } catch { continue; }
+              if (NOISE.test(o.r)) continue;
+              if (o.r === process.env.GITHUB_REPOSITORY) continue;     // свои не считаем
+              if (seen.includes(o.u)) continue;                        // уже приносили
+              const text = (o.t + " " + (o.b||"")).toLowerCase().slice(0, 4000);
+              // Чем именно мы полезны в этой ветке — если ничем, не приносим вовсе.
+              const angles = [];
+              if (/payment-required|challenge.*(header|body)|header.*challenge|v2/.test(text)) angles.push("v2 переносит челлендж в заголовок PAYMENT-REQUIRED — тело перестало быть источником");
+              if (/(dead|unreachable|invalid|not detected|no accepts|empty body)/.test(text)) angles.push("проверка живости: npx x402-payable <url> покажет, где именно ломается");
+              if (/\bupto\b|auth-capture|batch-settlement|scheme/.test(text)) angles.push("схемы: в спеке их четыре, и у upto/auth-capture amount — потолок, а не цена");
+              if (/payto|recipient|receiver/.test(text)) angles.push("смена получателя и адреса-двойники — у нас есть история наблюдений");
+              if (/testnet|sepolia|devnet/.test(text)) angles.push("тестнет с ценой в долларах — отдельная проверка");
+              if (/decimals|usdc.*amount|amount.*usdc/.test(text)) angles.push("decimals по сетям: USDC 6 везде, кроме BSC (18)");
+              if (!angles.length) continue;
+              rows.set(o.u, `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  чем полезны: ${angles.slice(0,2).join("; ")}`);
+            }
+            fs.writeFileSync("/tmp/found.md", [...rows.values()].slice(0, 12).join("\n"));
+            console.log("новых кандидатов:", rows.size);
+          '
+
+          if [ ! -s /tmp/found.md ]; then echo "нечего приносить"; exit 0; fi
+
+          BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Ответ пишется вручную и от лица владельца. Радар только находит ветки; посты он не делает._\n' \
+            "$(date -u +%F)" "$(cat /tmp/found.md)")
+
+          if [ -n "$TRACKER" ]; then
+            gh issue comment -R "$REPO" "$TRACKER" --body "$BODY"
+            gh issue reopen -R "$REPO" "$TRACKER" 2>/dev/null || true
+          else
+            gh label create -R "$REPO" radar --color 0E8A16 --description "Threads where our data answers the question" 2>/dev/null || true
+            gh issue create -R "$REPO" --title "radar: threads worth answering" --label radar --body "$BODY"
+          fi
