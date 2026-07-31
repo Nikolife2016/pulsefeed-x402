@@ -29,6 +29,18 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish x402-lint (skip if version exists)
+        working-directory: lint
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "x402-lint@$V" version >/dev/null 2>&1; then
+            echo "x402-lint@$V already on npm — skip publish"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Install mcp-publisher
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher

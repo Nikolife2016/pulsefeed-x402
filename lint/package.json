@@ -1,0 +1,17 @@
+{
+  "name": "x402-lint",
+  "version": "1.0.0",
+  "description": "Is this x402 endpoint actually payable? Checks a URL against the traps that let an endpoint return a valid 402 while still not being something you can buy. Zero dependencies, no account, no third-party calls.",
+  "type": "module",
+  "bin": { "x402-lint": "index.mjs" },
+  "main": "index.mjs",
+  "exports": { ".": "./index.mjs" },
+  "files": ["index.mjs", "README.md"],
+  "engines": { "node": ">=18" },
+  "keywords": ["x402", "402", "payments", "ai-agents", "agentic-payments", "lint", "ci", "usdc", "base", "stablecoin"],
+  "license": "MIT",
+  "author": "PulseFeed (https://pulsefeed.dev)",
+  "homepage": "https://pulsefeed.dev/correction",
+  "repository": { "type": "git", "url": "git+https://github.com/Nikolife2016/pulsefeed-x402.git", "directory": "lint" },
+  "bugs": { "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues" }
+}
