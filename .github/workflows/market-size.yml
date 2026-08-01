@@ -1,0 +1,120 @@
+# Сторож размера рынка. Решение заморозить активную разработку принято 31.07.2026 по замеру:
+# расчёты в экосистеме стоят пятый месяц (19 528 в сутки пять месяцев назад против 19 668
+# сейчас), при этом активных продавцов стало вчетверо больше, то есть дохода на продавца
+# вчетверо меньше. Выручка всей экосистемы — $10 576 за 30 дней.
+#
+# Решение верно ровно до тех пор, пока эти числа не сдвинулись. Без замера «подождём и
+# посмотрим» превращается в «забыли»: никто не заметит ни роста, ни окончательной смерти.
+# Этот крон и есть тот единственный датчик, ради которого мы ждём.
+#
+# Метрика — счётчик расчётов самого фасилитатора (quality.l30DaysTotalCalls в индексе Bazaar).
+# Он сверен с цепочкой: из 478 входящих переводов на шесть адресов с однозначной атрибуцией
+# все 478 оказались EIP-3009, отклонение счётчика +8,6% и всегда в сторону занижения.
+# Индекс читается целиком одним проходом — это дешевле, чем сканировать 1011 адресов по RPC,
+# и охватывает новых продавцов, которых выборка по сегодняшним адресам пропустила бы.
+name: market-size
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"      # понедельник, раз в неделю — быстрее рынок не меняется
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: write            # дописываем ряд наблюдений в репозиторий
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Measure the x402 market
+        id: m
+        run: |
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+
+            // Полная выгрузка индекса: offset-пагинация, потолок страницы 1000.
+            // Без пагинации отдаётся первая страница — ровно на этом мы уже обожглись,
+            // когда полгода считали 500 записей «всем каталогом».
+            let items = [];
+            for (let off = 0; off < 40000; off += 1000) {
+              const r = await fetch(`https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=1000&offset=${off}`);
+              if (!r.ok) { console.log(`страница ${off}: HTTP ${r.status}`); break; }
+              const j = await r.json();
+              const page = j.items || [];
+              items.push(...page);
+              if (!page.length || (j.pagination?.total && items.length >= j.pagination.total)) break;
+            }
+            if (items.length < 5000) { console.log(`::error::индекс отдал всего ${items.length} записей — замер недостоверен`); process.exit(1); }
+
+            let calls = 0, revenue = 0, earning = 0, multiPayer = 0;
+            for (const r of items) {
+              const q = r.quality || {}, a = (r.accepts || [])[0] || {};
+              const c = q.l30DaysTotalCalls || 0;
+              if (c > 0) earning++;
+              if ((q.l30DaysUniquePayers || 0) > 1) multiPayer++;
+              calls += c;
+              // Только exact: у upto/auth-capture сумма — потолок авторизации, а не цена.
+              if (a.scheme !== "exact") continue;
+              const price = Number(a.amount || 0) / 1e6;
+              // Цена выше $100 за вызов — это ошибка объявления, а не тариф. Один такой
+              // ресурс (coinmarketcap, amount=1e16) в одиночку давал «выручку» $310 млрд.
+              if (!isFinite(price) || price <= 0 || price > 100) continue;
+              revenue += price * c;
+            }
+            const out = {
+              date: new Date().toISOString().slice(0, 10),
+              endpoints: items.length, earningEndpoints: earning, multiPayerEndpoints: multiPayer,
+              paidCalls30d: calls, revenueUsd30d: +revenue.toFixed(2),
+            };
+            console.log(JSON.stringify(out));
+
+            mkdirSync("data", { recursive: true });
+            const path = "data/market-size.jsonl";
+            const prev = existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+            // Не дублируем замер за тот же день (ручной запуск поверх кронового).
+            const kept = prev.filter(p => p.date !== out.date);
+            writeFileSync(path, [...kept, out].map(o => JSON.stringify(o)).join("\n") + "\n");
+
+            // Базовая точка 31.07.2026 — то состояние, на котором принято решение ждать.
+            const BASE = { revenueUsd30d: 10575.92, paidCalls30d: 371507, earningEndpoints: 14673 };
+            const rev = out.revenueUsd30d / BASE.revenueUsd30d;
+            const cal = out.paidCalls30d / BASE.paidCalls30d;
+            const alerts = [];
+            if (rev >= 2.5) alerts.push(`выручка выросла в ${rev.toFixed(1)} раза: $${out.revenueUsd30d.toLocaleString("ru")} за 30 дней против $10 576 на момент заморозки`);
+            if (cal >= 1.8) alerts.push(`расчётов стало в ${cal.toFixed(1)} раза больше: ${out.paidCalls30d.toLocaleString("ru")} против 371 507 — спрос сдвинулся впервые за полгода`);
+            if (rev <= 0.35) alerts.push(`выручка упала до ${(100 * rev).toFixed(0)}% от базовой: $${out.revenueUsd30d.toLocaleString("ru")}. Рынок не замер, а сворачивается — повод закрывать ветку окончательно, а не ждать`);
+            if (out.multiPayerEndpoints >= 12000) alerts.push(`эндпоинтов с более чем одним плательщиком: ${out.multiPayerEndpoints} — структура спроса изменилась`);
+
+            writeFileSync(process.env.GITHUB_OUTPUT, [
+              `summary=${out.endpoints} эндпоинтов, ${out.earningEndpoints} с расчётами, ${out.paidCalls30d} вызовов, $${out.revenueUsd30d} за 30 дней`,
+              `alert=${alerts.length ? "true" : "false"}`,
+              `detail<<EOF`, alerts.join("\n"), `EOF`,
+            ].join("\n") + "\n", { flag: "a" });
+          '
+
+      - name: Commit the observation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/market-size.jsonl
+          git diff --staged --quiet || git commit -m "market-size: ${{ steps.m.outputs.summary }}"
+          git push
+
+      - name: Raise the flag only when the decision would change
+        if: steps.m.outputs.alert == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          BODY=$(printf 'Рынок x402 сдвинулся настолько, что решение от 31.07.2026 стоит пересмотреть.\n\n%s\n\nЗамер сегодня: %s\n\nРяд наблюдений: `data/market-size.jsonl`. Метод и оговорки: `publication/ЭКОНОМИКА-X402-ЗАМЕР.md` в рабочей папке.\n' \
+            "${{ steps.m.outputs.detail }}" "${{ steps.m.outputs.summary }}")
+          N=$(gh issue list -R "$REPO" --state open --label market-size --limit 1 --json number --jq '.[0].number')
+          if [ -n "$N" ]; then
+            gh issue comment -R "$REPO" "$N" --body "$BODY"
+          else
+            gh label create -R "$REPO" market-size --color 5319E7 --description "Ecosystem size crossed a threshold that changes the decision" 2>/dev/null || true
+            gh issue create -R "$REPO" --title "market-size: рынок сдвинулся, решение пора пересмотреть" --label market-size --body "$BODY"
+          fi
