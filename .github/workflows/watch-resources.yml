@@ -17,7 +17,12 @@ name: watch-resources
 
 on:
   schedule:
-    - cron: "40 6 * * *"     # ежедневно, после ночного краула
+    # Каждые 2 часа на время опыта. Суточный шаг не позволяет отнести расчёт к «до» или
+    # «после» выкатки — а именно это и составляет всё содержание наблюдения. Поле lastUpdated
+    # в индексе идёт вместе с lastCalledAt (91% записей совпадают в пределах секунды), значит
+    # индекс обновляется быстро и двухчасовое разрешение реально, а не номинально.
+    # Вернуть к суточному, когда опыт закончится.
+    - cron: "40 */2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -56,15 +61,16 @@ jobs:
             if (items.length < 5000) { console.log(`::error::индекс отдал ${items.length} записей — наблюдение недостоверно`); process.exit(1); }
 
             const byUrl = new Map(items.map(r => [r.resource, r]));
-            const date = new Date().toISOString().slice(0, 10);
+            const ts = new Date().toISOString();
+            const date = ts.slice(0, 10);
             const rows = WATCH.map(u => {
               const r = byUrl.get(u);
               // Ресурс мог исчезнуть из индекса — это само по себе наблюдение, а не повод
               // писать ноль: ноль читался бы как «платежей нет».
-              if (!r) return { date, url: u, present: false };
+              if (!r) return { ts, date, url: u, present: false };
               const q = r.quality || {};
               return {
-                date, url: u, present: true,
+                ts, date, url: u, present: true,
                 descLen: (r.description || "").length,
                 calls30d: q.l30DaysTotalCalls ?? null,
                 payers30d: q.l30DaysUniquePayers ?? null,
@@ -76,7 +82,11 @@ jobs:
             mkdirSync("data", { recursive: true });
             const path = "data/watch-2993.jsonl";
             const prev = existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
-            const kept = prev.filter(p => p.date !== date);      // ручной запуск не плодит дубли
+            // Дедуп по МЕТКЕ ВРЕМЕНИ, а не по дате: при двухчасовом шаге отбрасывание «дублей
+            // за сегодня» стирало бы весь ряд суток кроме последней точки — то есть ровно то
+            // разрешение, ради которого шаг и уменьшен.
+            const seen = new Set(rows.map(r => r.ts + "|" + r.url));
+            const kept = prev.filter(p => !seen.has((p.ts || p.date) + "|" + p.url));
             writeFileSync(path, [...kept, ...rows].map(o => JSON.stringify(o)).join("\n") + "\n");
           '
 
