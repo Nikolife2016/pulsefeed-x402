@@ -99,7 +99,18 @@ jobs:
         run: |
           set -euo pipefail
           LAST_FILE=data/watch-2993-lastseen.txt
-          SEEN=$( [ -f "$LAST_FILE" ] && cat "$LAST_FILE" || echo 0 )
+          if [ ! -f "$LAST_FILE" ]; then
+            # Первый запуск: запоминаем текущее состояние и молчим. Иначе «новым» окажется
+            # весь существующий тред, и первое же оповещение будет пересказом того, что мы
+            # только что сами прочитали и на что уже ответили. Оповещение о прошлом обесценивает
+            # оповещения о будущем.
+            gh api repos/x402-foundation/x402/issues/2993/comments --paginate --jq '[.[].id] | max' > "$LAST_FILE"
+            echo "первый запуск: отметка поставлена на $(cat "$LAST_FILE"), тревогу не поднимаем"
+            git add "$LAST_FILE"
+            git diff --staged --quiet || { git commit -m "watch-2993: seed the seen marker"; git push; }
+            exit 0
+          fi
+          SEEN=$(cat "$LAST_FILE")
           # Чужие комментарии новее того, что мы уже видели. Свои не считаем: иначе
           # собственная публикация поднимала бы тревогу о самой себе.
           NEW=$(gh api repos/x402-foundation/x402/issues/2993/comments --paginate \
