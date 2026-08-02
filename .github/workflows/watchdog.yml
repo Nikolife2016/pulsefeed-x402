@@ -77,11 +77,23 @@ jobs:
           # rdap.org, он проксирует к авторитетному серверу зоны и следует редиректам.
           # Если ответа нет вообще — это тоже повод для тревоги: молча пропускать
           # проверку срока домена нельзя, именно домен нас уже ронял.
+          # Один ретрай: 02.08.2026 rdap.org отдал сбой на одну попытку, и сторож поднял
+          # тревогу на ровном месте. Домен при этом был в полном порядке (до 2027-07-06).
           RD=$(curl -sL --max-time 25 -H 'accept: application/rdap+json' https://rdap.org/domain/pulsefeed.dev)
           EXP=$(printf '%s' "$RD" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((e['eventDate'] for e in d.get('events',[]) if e.get('eventAction')=='expiration'),''))" 2>/dev/null)
-          [ -z "$EXP" ] && FAIL="$FAIL\n- could not read the domain expiry from RDAP; the expiry check did not run"
-          EXP=${EXP%%.*}Z
-          if [ -n "$EXP" ]; then
+          if [ -z "$EXP" ]; then
+            sleep 20
+            RD=$(curl -sL --max-time 25 -H 'accept: application/rdap+json' https://rdap.org/domain/pulsefeed.dev)
+            EXP=$(printf '%s' "$RD" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((e['eventDate'] for e in d.get('events',[]) if e.get('eventAction')=='expiration'),''))" 2>/dev/null)
+          fi
+          if [ -z "$EXP" ]; then
+            # Молча пропустить проверку срока нельзя — именно домен нас уже ронял. Но и
+            # выдумывать срок нельзя: раньше пустая дата превращалась в "Z", проверка -n
+            # её пропускала, и к честному «не смог прочитать» добавлялось ложное
+            # «истекает через 0 дней» — две строки тревоги там, где нет ни одного факта.
+            FAIL="$FAIL\n- could not read the domain expiry from RDAP after a retry; the expiry check did not run (this is a gap in coverage, not a statement about the domain)"
+          else
+            EXP=${EXP%%.*}Z
             DLEFT=$(( ( $(date -d "$EXP" +%s) - $(date +%s) ) / 86400 ))
             echo "domain_days=$DLEFT" >> "$GITHUB_OUTPUT"
             [ "$DLEFT" -lt 45 ] && FAIL="$FAIL\n- domain expires in $DLEFT days ($EXP) — renew it"
