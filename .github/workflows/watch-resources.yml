@@ -1,0 +1,88 @@
+# Независимое наблюдение за чужим экспериментом.
+#
+# В ветке x402-foundation/x402#2993 продавец 402.com.tr показал, что расчёт по его эндпоинту
+# зависит от длины поля description, и собирается провести решающую проверку: удлинить описание
+# с 469 до 495 символов. Если сломается — дело не в длине, а в самом факте изменения текста.
+#
+# Мы предложили читать результат снаружи, чтобы его собственная телеметрия не участвовала в
+# проверке. Обещание стоит ровно столько, сколько стоит его исполнение, поэтому ряд пишется
+# автоматически и в публичный файл: показания должны быть проверяемы кем угодно, а не
+# существовать с моих слов.
+#
+# Метрика — quality.l30DaysTotalCalls из индекса Bazaar. Она сверена с цепочкой: из 478
+# входящих переводов на шесть адресов с однозначной атрибуцией все 478 оказались EIP-3009,
+# счётчик занижает примерно на 9%. Длину description пишем рядом: именно её изменение и есть
+# ставящийся эксперимент, и без неё ряд нечитаем.
+name: watch-resources
+
+on:
+  schedule:
+    - cron: "40 6 * * *"     # ежедневно, после ночного краула
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the counters for watched resources
+        run: |
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+
+            // За чем следим и почему. Список короткий намеренно: это наблюдение за конкретным
+            // экспериментом, а не ещё один универсальный краул.
+            const WATCH = [
+              "https://402.com.tr/api/x402/safe-check",       // объект проверки 469 → 495
+              "https://402.com.tr/api/x402/paymaster-check",
+              "https://402.com.tr/api/x402/morpho-health",    // контроль: 490 симв., платежи идут
+              "https://402.com.tr/api/x402/gas-payer",
+            ];
+
+            let items = [];
+            for (let off = 0; off < 40000; off += 1000) {
+              const r = await fetch(`https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=1000&offset=${off}`);
+              if (!r.ok) { console.log(`страница ${off}: HTTP ${r.status}`); break; }
+              const j = await r.json();
+              const page = j.items || [];
+              items.push(...page);
+              if (!page.length || (j.pagination?.total && items.length >= j.pagination.total)) break;
+            }
+            if (items.length < 5000) { console.log(`::error::индекс отдал ${items.length} записей — наблюдение недостоверно`); process.exit(1); }
+
+            const byUrl = new Map(items.map(r => [r.resource, r]));
+            const date = new Date().toISOString().slice(0, 10);
+            const rows = WATCH.map(u => {
+              const r = byUrl.get(u);
+              // Ресурс мог исчезнуть из индекса — это само по себе наблюдение, а не повод
+              // писать ноль: ноль читался бы как «платежей нет».
+              if (!r) return { date, url: u, present: false };
+              const q = r.quality || {};
+              return {
+                date, url: u, present: true,
+                descLen: (r.description || "").length,
+                calls30d: q.l30DaysTotalCalls ?? null,
+                payers30d: q.l30DaysUniquePayers ?? null,
+                lastCalledAt: q.lastCalledAt ?? null,
+              };
+            });
+            rows.forEach(r => console.log(JSON.stringify(r)));
+
+            mkdirSync("data", { recursive: true });
+            const path = "data/watch-2993.jsonl";
+            const prev = existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+            const kept = prev.filter(p => p.date !== date);      // ручной запуск не плодит дубли
+            writeFileSync(path, [...kept, ...rows].map(o => JSON.stringify(o)).join("\n") + "\n");
+          '
+
+      - name: Commit the reading
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/watch-2993.jsonl
+          git diff --staged --quiet || git commit -m "watch-2993: daily reading of the counters under test"
+          git push
