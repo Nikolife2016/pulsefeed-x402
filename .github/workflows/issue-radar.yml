@@ -108,9 +108,15 @@ jobs:
             # лежат восемь находок. 03.08 находки пролежали сутки ровно поэтому: список
             # открытых issues был просмотрен, а issue не открыта. Счётчик в заголовке делает
             # пропуск невозможным без чтения.
+            # Ветки, которые мы посмотрели и сознательно не берём: тема чужая, наш единственный
+            # угол — реклама собственного инструмента, и так далее. Без этого списка счётчик
+            # копит их вечно, заголовок снова перестаёт что-либо значить, и правка, ради которой
+            # он вводился, обнуляется.
+            SKIP=data/radar-skip.txt
             PEND=0
             while read -r U; do
               [ -z "$U" ] && continue
+              [ -f "$SKIP" ] && grep -qxF "$U" "$SKIP" && continue
               R=$(printf '%s' "$U" | sed -E 's#https://github.com/([^/]+/[^/]+)/issues/([0-9]+).*#\1#')
               N=$(printf '%s' "$U" | sed -E 's#.*/issues/([0-9]+).*#\1#')
               # Отвечали ли мы там уже. Ошибка запроса трактуется как «не отвечали»:
@@ -118,8 +124,22 @@ jobs:
               MINE=$(gh api "repos/$R/issues/$N/comments" --jq '[.[] | select(.user.login=="Nikolife2016")] | length' 2>/dev/null || echo 0)
               [ "${MINE:-0}" -eq 0 ] && PEND=$((PEND+1))
             done < <(grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' /tmp/found.md | sort -u)
+            # Согласование числительного: «1 ветка», «2 ветки», «5 веток». Мелочь, но заголовок
+            # читают каждый день, и «1 веток» выглядит как недоделка — а доверие к сторожу
+            # складывается в том числе из таких мелочей.
+            case $(( PEND % 100 )) in
+              11|12|13|14) W="веток" ;;
+              *) case $(( PEND % 10 )) in
+                   1) W="ветка ждёт" ;;
+                   2|3|4) W="ветки ждут" ;;
+                   *) W="веток ждут" ;;
+                 esac ;;
+            esac
+            case "$W" in веток) W="веток ждут" ;; esac
             if [ "$PEND" -gt 0 ]; then
-              gh issue edit -R "$REPO" "$TRACKER" --title "radar: $PEND веток ждут ответа" >/dev/null
+              gh issue edit -R "$REPO" "$TRACKER" --title "radar: $PEND $W ответа" >/dev/null
+            else
+              gh issue edit -R "$REPO" "$TRACKER" --title "radar: неотвеченного нет" >/dev/null
             fi
           else
             gh label create -R "$REPO" radar --color 0E8A16 --description "Threads where our data answers the question" 2>/dev/null || true
