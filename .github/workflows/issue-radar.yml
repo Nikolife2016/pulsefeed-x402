@@ -118,7 +118,15 @@ jobs:
           [ -z "$TRACKER" ] && exit 0
           SKIP=data/radar-skip.txt
           PEND=0
-          { cat /tmp/seen.txt 2>/dev/null; cat /tmp/found.md 2>/dev/null; } \
+          # Окно — 7 дней. Считать всю историю радара бессмысленно: за неделю чужая ветка
+          # либо решается, либо затухает, и счётчик «50 веток ждут ответа» на накопленном
+          # хвосте несёт не больше смысла, чем прежний неизменный заголовок. Берём тело
+          # трекера и только комментарии за последние 7 суток.
+          SINCE=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          { gh issue view "$TRACKER" -R "$REPO" --json body --jq '.body';
+            gh api "repos/$REPO/issues/$TRACKER/comments" \
+              --jq "[.[] | select(.created_at > \"$SINCE\")] | .[].body";
+            cat /tmp/found.md 2>/dev/null; } \
             | grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' | sort -u > /tmp/all-urls.txt
           while read -r U; do
             [ -z "$U" ] && continue
