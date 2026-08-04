@@ -1,0 +1,154 @@
+# Монитор спроса. Перенесён из планировщика Claude Code 04.08.2026.
+#
+# Причина переноса: планировщик приложения работает только когда приложение открыто. Замер —
+# монитор был запланирован на 09:00 локально, а фактически стартовал в 11:38 (опоздание 159
+# минут), потому что в 9 утра ноутбук закрыт. Владелец каждое утро видел, как задача «ждёт
+# его»: она ждала не подтверждения, а запуска. Здесь она идёт по расписанию и без ноутбука.
+#
+# Молчание — штатное состояние. Issue заводится ТОЛЬКО когда что-то сдвинулось с нуля;
+# ежедневный отчёт «всё по-прежнему ноль» — это шум, который приучает не читать письма.
+# Ряд наблюдений пишется всегда, в data/demand.jsonl, независимо от тревог.
+name: demand-monitor
+
+on:
+  schedule:
+    - cron: "10 3 * * *"     # 10:10 по местному времени владельца (UTC+7)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # gh недоступен изнутри node, поэтому данные GitHub собираем отдельным шагом и передаём
+      # переменными окружения. Побочная выгода: все команды здесь — только чтение, ни одна не
+      # может ничего изменить в чужих репозиториях.
+      - name: Collect GitHub-side data
+        id: gh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          echo "REPO_JSON=$(gh api repos/${{ github.repository }} --jq '{stargazers_count,forks_count,subscribers_count}' -q . 2>/dev/null || echo '{}')" >> "$GITHUB_ENV"
+          PRS="[]"
+          for SPEC in "Merit-Systems/awesome-agentic-commerce:420" "x402-foundation/x402:2982" "hslatman/awesome-threat-intelligence:417" "docker/mcp-registry:4578"; do
+            R="${SPEC%%:*}"; N="${SPEC##*:}"
+            ST=$(gh api "repos/$R/pulls/$N" --jq 'if .merged then "MERGED" else (.state|ascii_upcase) end' 2>/dev/null || echo "UNKNOWN")
+            PRS=$(printf '%s' "$PRS" | jq -c --arg r "$R" --arg n "$N" --arg s "$ST" '. + [{repo:$r, number:($n|tonumber), state:$s}]')
+          done
+          echo "PRS_JSON=$PRS" >> "$GITHUB_ENV"
+
+      - name: Measure demand and attention
+        id: m
+        env:
+          DEMAND_KEY: ${{ secrets.PULSEFEED_DEMAND_KEY }}
+        run: |
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
+
+            // Наш собственный кошелёк. Самооплата спросом НЕ является: сервис платит сам себе,
+            // чтобы держаться в каталоге Bazaar, и путать это с покупателем — обманывать себя.
+            const HOT = "0x3a4c3ab6ebf872f500010c81ce2d75ec0da37305";
+            const LEDGER = "0x7f5f784ba98cecfc0ba4336f0e48222a3d4d69a8";
+            const j = async (u, o) => { try { const r = await fetch(u, o); return r.ok ? await r.json() : null; } catch { return null; } };
+
+            const out = { date: new Date().toISOString().slice(0, 10) };
+            const alerts = [];
+
+            // ── A. Платящие сигналы
+            const f = await j(`https://pulsefeed.dev/_demand?key=${process.env.DEMAND_KEY}&days=14`);
+            if (f) {
+              const pw = f.paywall || {};
+              out.total = f.total; out.paid = f.paid;
+              out.attempts = pw.attempts; out.impressions = pw.impressions;
+              const ua = Object.keys(pw.payingUa || {});
+              out.payingUa = ua;
+              // Любой плательщик, кроме нашего собственного клиента, — это первый внешний.
+              const external = ua.filter(k => k !== "node");
+              if (external.length) alerts.push(`🎉 ПЕРВЫЙ ВНЕШНИЙ ПЛАТЕЛЬЩИК в воронке: payingUa = ${JSON.stringify(pw.payingUa)}`);
+            } else { out.funnelError = true; }
+
+            const tx = await j(`https://base.blockscout.com/api/v2/addresses/${LEDGER}/token-transfers?type=ERC-20`);
+            if (tx?.items) {
+              const inbound = tx.items.filter(i => (i.to?.hash || "").toLowerCase() === LEDGER);
+              const ext = inbound.filter(i => (i.from?.hash || "").toLowerCase() !== HOT);
+              out.transfersIn = inbound.length; out.transfersExternal = ext.length;
+              // Пылевые переводы — отравление адреса, а не платёж. Порог 0.001 USDC отсекает
+              // их: реальный вызов стоит от цента. В июле три таких «прихода» по 0.000012 USDC
+              // пришли с адреса-двойника нашего кошелька.
+              const real = ext.filter(i => Number(i.total?.value || 0) / 1e6 >= 0.001);
+              out.transfersExternalReal = real.length;
+              if (real.length) {
+                const sum = real.reduce((s, i) => s + Number(i.total.value) / 1e6, 0);
+                alerts.push(`🎉 ВНЕШНИЙ ПЛАТЁЖ ONCHAIN: ${real.length} перевод(ов) на ${sum.toFixed(4)} USDC от ${[...new Set(real.map(i => i.from.hash))].join(", ")}`);
+              }
+            } else { out.chainError = true; }
+
+            // ── B. Внимание к публикациям
+            for (const p of ["pulsefeed-x402-guard", "pulsefeed-x402-mcp", "pulsefeed-x402-ai-tools"]) {
+              const d = await j(`https://api.npmjs.org/downloads/point/last-week/${p}`);
+              out[`npm_${p.replace(/[^a-z]/g, "")}`] = d?.downloads ?? null;
+            }
+            const hf = await j("https://huggingface.co/api/datasets/Nikolife/pulsefeed-x402-security");
+            out.hfDownloads = hf?.downloads ?? null; out.hfLikes = hf?.likes ?? null;
+            // Лайк ставит человек, скачивание — чаще индексатор. Поэтому тревога только на лайк.
+            if ((hf?.likes ?? 0) > 0) alerts.push(`👀 У датасета на HuggingFace появился лайк (${hf.likes}) — первый человеческий сигнал`);
+
+            const repo = JSON.parse(process.env.REPO_JSON || "{}");
+            out.stars = repo.stargazers_count ?? null; out.forks = repo.forks_count ?? null;
+            if ((repo.stargazers_count ?? 0) > 0) alerts.push(`👀 На репозитории появились звёзды: ${repo.stargazers_count}`);
+
+            // ── C. Дистрибуция: смержили ли где-нибудь
+            const prs = JSON.parse(process.env.PRS_JSON || "[]");
+            out.prs = prs;
+            for (const p of prs) {
+              if (p.state === "MERGED") alerts.push(`🟢 PR СМЕРЖЕН: ${p.repo}#${p.number} — размещение состоялось`);
+            }
+
+            // ── Здоровье
+            const h = await j("https://pulsefeed.dev/health");
+            out.health = h?.status ?? "недоступен";
+            if (out.health !== "up") alerts.push(`🔴 Сервис отвечает статусом «${out.health}»`);
+
+            mkdirSync("data", { recursive: true });
+            const path = "data/demand.jsonl";
+            const prev = existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+            writeFileSync(path, [...prev.filter(p => p.date !== out.date), out].map(o => JSON.stringify(o)).join("\n") + "\n");
+
+            console.log(JSON.stringify(out));
+            const summary = `воронка: попыток ${out.attempts ?? "?"}, платящих UA ${JSON.stringify(out.payingUa ?? [])} | ончейн внешних ${out.transfersExternalReal ?? "?"} | npm mcp ${out.npm_pulsefeedxmcp ?? "?"} | HF ${out.hfDownloads ?? "?"}/${out.hfLikes ?? "?"} лайков | звёзд ${out.stars ?? "?"} | сервис ${out.health}`;
+            appendFileSync(process.env.GITHUB_OUTPUT, [
+              `summary=${summary}`,
+              `alert=${alerts.length ? "true" : "false"}`,
+              "detail<<EOF", alerts.join("\n"), "EOF",
+            ].join("\n") + "\n");
+          '
+
+      - name: Commit the observation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/demand.jsonl
+          git diff --staged --quiet || git commit -m "demand: ${{ steps.m.outputs.summary }}"
+          git push
+
+      - name: Raise the flag only when something moved off zero
+        if: steps.m.outputs.alert == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          BODY=$(printf 'Что-то сдвинулось с нуля.\n\n%s\n\n---\nЗамер: %s\n\nРяд наблюдений: `data/demand.jsonl`.\n' \
+            "${{ steps.m.outputs.detail }}" "${{ steps.m.outputs.summary }}")
+          N=$(gh issue list -R "$REPO" --state open --label demand --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$N" ]; then
+            gh issue comment -R "$REPO" "$N" --body "$BODY"
+          else
+            gh label create -R "$REPO" demand --color FBCA04 --description "A demand or attention signal moved off zero" 2>/dev/null || true
+            gh issue create -R "$REPO" --title "demand: сигнал сдвинулся с нуля" --label demand --body "$BODY"
+          fi
