@@ -95,53 +95,57 @@ jobs:
             console.log("новых кандидатов:", rows.size);
           '
 
-          if [ ! -s /tmp/found.md ]; then echo "нечего приносить"; exit 0; fi
+          NOTHING_NEW=0
+          [ -s /tmp/found.md ] || { echo "новых кандидатов нет"; NOTHING_NEW=1; }
 
           BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Ответ пишется вручную и от лица владельца. Радар только находит ветки; посты он не делает._\n' \
             "$(date -u +%F)" "$(cat /tmp/found.md)")
 
-          if [ -n "$TRACKER" ]; then
+          if [ -n "$TRACKER" ] && [ "$NOTHING_NEW" = "0" ]; then
             gh issue comment -R "$REPO" "$TRACKER" --body "$BODY"
             gh issue reopen -R "$REPO" "$TRACKER" 2>/dev/null || true
-            # Заголовок несёт число НЕОТВЕЧЕННЫХ веток. Без этого в списке issues видно только
-            # «radar: threads worth answering» — строку, одинаковую и когда там пусто, и когда
-            # лежат восемь находок. 03.08 находки пролежали сутки ровно поэтому: список
-            # открытых issues был просмотрен, а issue не открыта. Счётчик в заголовке делает
-            # пропуск невозможным без чтения.
-            # Ветки, которые мы посмотрели и сознательно не берём: тема чужая, наш единственный
-            # угол — реклама собственного инструмента, и так далее. Без этого списка счётчик
-            # копит их вечно, заголовок снова перестаёт что-либо значить, и правка, ради которой
-            # он вводился, обнуляется.
-            SKIP=data/radar-skip.txt
-            PEND=0
-            while read -r U; do
-              [ -z "$U" ] && continue
-              [ -f "$SKIP" ] && grep -qxF "$U" "$SKIP" && continue
-              R=$(printf '%s' "$U" | sed -E 's#https://github.com/([^/]+/[^/]+)/issues/([0-9]+).*#\1#')
-              N=$(printf '%s' "$U" | sed -E 's#.*/issues/([0-9]+).*#\1#')
-              # Отвечали ли мы там уже. Ошибка запроса трактуется как «не отвечали»:
-              # лишняя строка в счётчике безвреднее пропущенной ветки.
-              MINE=$(gh api "repos/$R/issues/$N/comments" --jq '[.[] | select(.user.login=="Nikolife2016")] | length' 2>/dev/null || echo 0)
-              [ "${MINE:-0}" -eq 0 ] && PEND=$((PEND+1))
-            done < <(grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' /tmp/found.md | sort -u)
-            # Согласование числительного: «1 ветка», «2 ветки», «5 веток». Мелочь, но заголовок
-            # читают каждый день, и «1 веток» выглядит как недоделка — а доверие к сторожу
-            # складывается в том числе из таких мелочей.
-            case $(( PEND % 100 )) in
-              11|12|13|14) W="веток" ;;
-              *) case $(( PEND % 10 )) in
-                   1) W="ветка ждёт" ;;
-                   2|3|4) W="ветки ждут" ;;
-                   *) W="веток ждут" ;;
-                 esac ;;
-            esac
-            case "$W" in веток) W="веток ждут" ;; esac
-            if [ "$PEND" -gt 0 ]; then
-              gh issue edit -R "$REPO" "$TRACKER" --title "radar: $PEND $W ответа" >/dev/null
-            else
-              gh issue edit -R "$REPO" "$TRACKER" --title "radar: неотвеченного нет" >/dev/null
-            fi
-          else
+          elif [ -z "$TRACKER" ] && [ "$NOTHING_NEW" = "0" ]; then
             gh label create -R "$REPO" radar --color 0E8A16 --description "Threads where our data answers the question" 2>/dev/null || true
             gh issue create -R "$REPO" --title "radar: threads worth answering" --label radar --body "$BODY"
+            TRACKER=$(gh issue list -R "$REPO" --state all --label radar --limit 1 --json number --jq '.[0].number')
           fi
+
+          # Пересчёт заголовка идёт ВСЕГДА и по всей истории находок, а не только когда нашлось
+          # новое. Раньше он стоял внутри ветки «нашлись кандидаты», и в день без находок
+          # заголовок оставался вчерашним — то есть счётчик, поставленный против устаревания,
+          # сам устаревал. Источник — тело трекера и все его комментарии (/tmp/seen.txt),
+          # плюс сегодняшняя выдача.
+          [ -z "$TRACKER" ] && exit 0
+          SKIP=data/radar-skip.txt
+          PEND=0
+          { cat /tmp/seen.txt 2>/dev/null; cat /tmp/found.md 2>/dev/null; } \
+            | grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' | sort -u > /tmp/all-urls.txt
+          while read -r U; do
+            [ -z "$U" ] && continue
+            # Сознательно пропущенные: тема чужая, отвечать нечем кроме саморекламы. Без этого
+            # списка они копятся вечно и заголовок снова перестаёт что-либо значить.
+            [ -f "$SKIP" ] && grep -qxF "$U" "$SKIP" && continue
+            R=$(printf '%s' "$U" | sed -E 's#https://github.com/([^/]+/[^/]+)/issues/([0-9]+).*#\1#')
+            N=$(printf '%s' "$U" | sed -E 's#.*/issues/([0-9]+).*#\1#')
+            # Ошибка запроса трактуется как «не отвечали»: лишняя строка в счётчике безвреднее
+            # пропущенной ветки.
+            MINE=$(gh api "repos/$R/issues/$N/comments" --jq '[.[] | select(.user.login=="Nikolife2016")] | length' 2>/dev/null || echo 0)
+            [ "${MINE:-0}" -eq 0 ] && PEND=$((PEND+1))
+          done < /tmp/all-urls.txt
+          # Согласование числительного: заголовок читают каждый день, и «1 веток» выглядит
+          # как недоделка.
+          case $(( PEND % 100 )) in
+            11|12|13|14) W="веток ждут" ;;
+            *) case $(( PEND % 10 )) in
+                 1) W="ветка ждёт" ;;
+                 2|3|4) W="ветки ждут" ;;
+                 *) W="веток ждут" ;;
+               esac ;;
+          esac
+          if [ "$PEND" -gt 0 ]; then
+            gh issue edit -R "$REPO" "$TRACKER" --title "radar: $PEND $W ответа" >/dev/null
+            gh issue reopen -R "$REPO" "$TRACKER" 2>/dev/null || true
+          else
+            gh issue edit -R "$REPO" "$TRACKER" --title "radar: неотвеченного нет" >/dev/null
+          fi
+          echo "неотвеченных веток: $PEND"
