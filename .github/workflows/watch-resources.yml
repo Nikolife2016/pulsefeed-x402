@@ -102,44 +102,59 @@ jobs:
       # единственный живой разговор проекта: собеседник публично снял своё утверждение,
       # ставит решающий опыт и ждёт от нас чтения результата. Ответ, которого никто не
       # заметил неделю, — это несостоявшийся разговор, а не задержка.
-      - name: Tell us if the thread moved
+      # Следим за ДВУМЯ ветками. #2993 — разговор, где идёт опыт. #3049 — PR к спецификации,
+      # в котором процитировано наше измерение; у него неделя до автозакрытия по бездействию,
+      # и если он тихо умрёт, единственный долговечный след работы умрёт вместе с ним.
+      # Радар ищет новые ветки и за уже начатыми разговорами не следит.
+      - name: Tell us if a watched thread moved
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          LAST_FILE=data/watch-2993-lastseen.txt
-          if [ ! -f "$LAST_FILE" ]; then
-            # Первый запуск: запоминаем текущее состояние и молчим. Иначе «новым» окажется
-            # весь существующий тред, и первое же оповещение будет пересказом того, что мы
-            # только что сами прочитали и на что уже ответили. Оповещение о прошлом обесценивает
-            # оповещения о будущем.
-            gh api repos/x402-foundation/x402/issues/2993/comments --paginate --jq '[.[].id] | max' > "$LAST_FILE"
-            echo "первый запуск: отметка поставлена на $(cat "$LAST_FILE"), тревогу не поднимаем"
-            git add "$LAST_FILE"
-            git diff --staged --quiet || { git commit -m "watch-2993: seed the seen marker"; git push; }
-            exit 0
-          fi
-          SEEN=$(cat "$LAST_FILE")
-          # Чужие комментарии новее того, что мы уже видели. Свои не считаем: иначе
-          # собственная публикация поднимала бы тревогу о самой себе.
-          NEW=$(gh api repos/x402-foundation/x402/issues/2993/comments --paginate \
-            --jq "[.[] | select(.id > $SEEN) | select(.user.login != \"Nikolife2016\")] | length")
-          if [ "$NEW" -gt 0 ]; then
-            LATEST=$(gh api repos/x402-foundation/x402/issues/2993/comments --paginate \
-              --jq '[.[] | select(.user.login != "Nikolife2016")] | last | "\(.user.login)|\(.html_url)|\(.body[0:600])"')
-            WHO=$(printf '%s' "$LATEST" | cut -d'|' -f1)
-            URL=$(printf '%s' "$LATEST" | cut -d'|' -f2)
-            BODY=$(printf '%s' "$LATEST" | cut -d'|' -f3-)
-            MSG=$(printf 'В ветке #2993 ответил **%s** — %s\n\n> %s\n\n---\nПоказания счётчиков ведутся в `data/watch-2993.jsonl` независимо от этого.\n' "$WHO" "$URL" "$BODY")
-            N=$(gh issue list -R "$REPO" --state open --label thread --limit 1 --json number --jq '.[0].number // empty')
-            if [ -n "$N" ]; then
-              gh issue comment -R "$REPO" "$N" --body "$MSG"
-            else
-              gh label create -R "$REPO" thread --color 1D76DB --description "A live conversation we are part of has moved" 2>/dev/null || true
-              gh issue create -R "$REPO" --title "thread: в #2993 есть ответ" --label thread --body "$MSG"
+          set -uo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for T in 2993 3049; do
+            LAST_FILE="data/watch-${T}-lastseen.txt"
+            if [ ! -f "$LAST_FILE" ]; then
+              # Первый запуск: запоминаем состояние и молчим. Иначе «новым» окажется весь
+              # существующий тред, и первое оповещение будет пересказом того, что мы только
+              # что прочитали сами. Оповещение о прошлом обесценивает оповещения о будущем.
+              gh api "repos/x402-foundation/x402/issues/$T/comments" --paginate --jq '[.[].id] | max' > "$LAST_FILE" 2>/dev/null || echo 0 > "$LAST_FILE"
+              echo "#$T: отметка поставлена, тревогу не поднимаем"
+              continue
             fi
-          fi
-          gh api repos/x402-foundation/x402/issues/2993/comments --paginate --jq '[.[].id] | max' > "$LAST_FILE"
-          git add "$LAST_FILE"
-          git diff --staged --quiet || { git commit -m "watch-2993: mark thread comments seen"; git push; }
+            SEEN=$(cat "$LAST_FILE")
+            NEW=$(gh api "repos/x402-foundation/x402/issues/$T/comments" --paginate \
+              --jq "[.[] | select(.id > ${SEEN:-0}) | select(.user.login != \"Nikolife2016\")] | length" 2>/dev/null || echo 0)
+            # У PR отдельно смотрим состояние: закрытие по бездействию комментария не оставляет,
+            # то есть молчаливая смерть иначе прошла бы незамеченной — а это единственный исход,
+            # который здесь стоит поймать.
+            STATE=""
+            if [ "$T" = "3049" ]; then
+              STATE=$(gh api "repos/x402-foundation/x402/pulls/$T" --jq 'if .merged then "MERGED" else (.state|ascii_upcase) end' 2>/dev/null || echo "")
+              PREV=$( [ -f data/watch-3049-state.txt ] && cat data/watch-3049-state.txt || echo "$STATE" )
+              printf '%s' "$STATE" > data/watch-3049-state.txt
+              [ "$STATE" != "$PREV" ] && NEW=$((NEW+1))
+            fi
+            if [ "${NEW:-0}" -gt 0 ]; then
+              LATEST=$(gh api "repos/x402-foundation/x402/issues/$T/comments" --paginate \
+                --jq '[.[] | select(.user.login != "Nikolife2016")] | last | "\(.user.login)|\(.html_url)|\(.body[0:600])"' 2>/dev/null)
+              WHO=$(printf '%s' "$LATEST" | cut -d'|' -f1)
+              URL=$(printf '%s' "$LATEST" | cut -d'|' -f2)
+              BODY=$(printf '%s' "$LATEST" | cut -d'|' -f3-)
+              EXTRA=""
+              [ -n "$STATE" ] && EXTRA=" (состояние PR: $STATE)"
+              MSG=$(printf 'Ветка **#%s** сдвинулась%s.\n\nПоследнее от **%s** — %s\n\n> %s\n' "$T" "$EXTRA" "$WHO" "$URL" "$BODY")
+              N=$(gh issue list -R "$REPO" --state open --label thread --limit 1 --json number --jq '.[0].number // empty')
+              if [ -n "$N" ]; then
+                gh issue comment -R "$REPO" "$N" --body "$MSG"
+              else
+                gh label create -R "$REPO" thread --color 1D76DB --description "A live conversation we are part of has moved" 2>/dev/null || true
+                gh issue create -R "$REPO" --title "thread: движение в ветке #$T" --label thread --body "$MSG"
+              fi
+            fi
+            gh api "repos/x402-foundation/x402/issues/$T/comments" --paginate --jq '[.[].id] | max' > "$LAST_FILE" 2>/dev/null || true
+          done
+          git add data/ 2>/dev/null || true
+          git diff --staged --quiet || { git commit -m "watch: mark watched threads seen"; git push; }
