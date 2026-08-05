@@ -1,4 +1,6 @@
 https://github.com/Merit-Systems/x402scan/issues/1053
 https://github.com/chatmcp/mcpso/issues/3427
 https://github.com/ihint/merchant-context/issues/6
+https://github.com/planetarium/a2x/issues/203
+https://github.com/planetarium/vicoop-bridge/issues/451
 https://github.com/x402-foundation/x402/issues/3047
