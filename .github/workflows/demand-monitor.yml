@@ -129,22 +129,40 @@ jobs:
             ].join("\n") + "\n");
           '
 
+      # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
+      # Подстановка ${{ }} происходит ДО запуска шелла — она вклеивает текст прямо в скрипт,
+      # поэтому строка вида ""; rm -rf /; #" в данных становится командой. В demand-monitor
+      # сюда доходил User-Agent постороннего: любой запрос с заголовком X-PAYMENT считался
+      # оплатой, и UA уезжал в payingUa. Раннер имеет contents:write на репозиторий, на
+      # который указывает provenance наших npm-пакетов. Через env значение приходит
+      # переменной и шеллом не разбирается.
       - name: Commit the observation
+        env:
+          SUMMARY: ${{ steps.m.outputs.summary }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/demand.jsonl
-          git diff --staged --quiet || git commit -m "demand: ${{ steps.m.outputs.summary }}"
+          git diff --staged --quiet || git commit -m "demand: $SUMMARY"
           git push
 
+      # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
+      # Подстановка ${{ }} происходит ДО запуска шелла — она вклеивает текст прямо в скрипт,
+      # поэтому строка вида ""; rm -rf /; #" в данных становится командой. В demand-monitor
+      # сюда доходил User-Agent постороннего: любой запрос с заголовком X-PAYMENT считался
+      # оплатой, и UA уезжал в payingUa. Раннер имеет contents:write на репозиторий, на
+      # который указывает provenance наших npm-пакетов. Через env значение приходит
+      # переменной и шеллом не разбирается.
       - name: Raise the flag only when something moved off zero
         if: steps.m.outputs.alert == 'true'
         env:
+          SUMMARY: ${{ steps.m.outputs.summary }}
+          DETAIL: ${{ steps.m.outputs.detail }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           BODY=$(printf 'Что-то сдвинулось с нуля.\n\n%s\n\n---\nЗамер: %s\n\nРяд наблюдений: `data/demand.jsonl`.\n' \
-            "${{ steps.m.outputs.detail }}" "${{ steps.m.outputs.summary }}")
+            "$DETAIL" "$SUMMARY")
           N=$(gh issue list -R "$REPO" --state open --label demand --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$N" ]; then
             gh issue comment -R "$REPO" "$N" --body "$BODY"

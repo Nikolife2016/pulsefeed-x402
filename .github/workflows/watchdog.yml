@@ -120,15 +120,26 @@ jobs:
           fi
           exit 0
 
+      # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
+      # Подстановка ${{ }} происходит ДО запуска шелла — она вклеивает текст прямо в скрипт,
+      # поэтому строка вида ""; rm -rf /; #" в данных становится командой. В demand-monitor
+      # сюда доходил User-Agent постороннего: любой запрос с заголовком X-PAYMENT считался
+      # оплатой, и UA уезжал в payingUa. Раннер имеет contents:write на репозиторий, на
+      # который указывает provenance наших npm-пакетов. Через env значение приходит
+      # переменной и шеллом не разбирается.
       - name: Open or update an alert issue
         if: steps.probe.outputs.failed == 'true'
         env:
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          TLS_DAYS: ${{ steps.probe.outputs.tls_days }}
+          DOMAIN_DAYS: ${{ steps.probe.outputs.domain_days }}
+          WALLET_USDC: ${{ steps.probe.outputs.wallet_usdc }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           TITLE="watchdog: pulsefeed.dev needs attention"
           BODY=$(printf 'Automated external check failed at %s UTC.\n%b\n\n---\nTLS days left: %s · domain days left: %s · buyer wallet: %s USDC\n\nRe-run: Actions → watchdog → Run workflow. This issue is updated in place while the condition persists and closed automatically once every check passes.\n' \
-            "$(date -u +%FT%TZ)" "${{ steps.probe.outputs.detail }}" "${{ steps.probe.outputs.tls_days }}" "${{ steps.probe.outputs.domain_days }}" "${{ steps.probe.outputs.wallet_usdc }}")
+            "$(date -u +%FT%TZ)" "$DETAIL" "$TLS_DAYS" "$DOMAIN_DAYS" "$WALLET_USDC")
           EXISTING=$(gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number')
           if [ -n "$EXISTING" ]; then
             gh issue comment -R "$REPO" "$EXISTING" --body "$BODY"
@@ -137,14 +148,24 @@ jobs:
             gh issue create -R "$REPO" --title "$TITLE" --label watchdog --body "$BODY"
           fi
 
+      # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
+      # Подстановка ${{ }} происходит ДО запуска шелла — она вклеивает текст прямо в скрипт,
+      # поэтому строка вида ""; rm -rf /; #" в данных становится командой. В demand-monitor
+      # сюда доходил User-Agent постороннего: любой запрос с заголовком X-PAYMENT считался
+      # оплатой, и UA уезжал в payingUa. Раннер имеет contents:write на репозиторий, на
+      # который указывает provenance наших npm-пакетов. Через env значение приходит
+      # переменной и шеллом не разбирается.
       - name: Close the alert once everything passes
         if: steps.probe.outputs.failed == 'false'
         env:
+          TLS_DAYS: ${{ steps.probe.outputs.tls_days }}
+          DOMAIN_DAYS: ${{ steps.probe.outputs.domain_days }}
+          WALLET_USDC: ${{ steps.probe.outputs.wallet_usdc }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           N=$(gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number')
           if [ -n "$N" ]; then
-            gh issue comment -R "$REPO" "$N" --body "Recovered — all checks passed at $(date -u +%FT%TZ) UTC. TLS ${{ steps.probe.outputs.tls_days }}d, domain ${{ steps.probe.outputs.domain_days }}d, wallet ${{ steps.probe.outputs.wallet_usdc }} USDC."
+            gh issue comment -R "$REPO" "$N" --body "Recovered — all checks passed at $(date -u +%FT%TZ) UTC. TLS $TLS_DAYSd, domain $DOMAIN_DAYSd, wallet $WALLET_USDC USDC."
             gh issue close -R "$REPO" "$N"
           fi

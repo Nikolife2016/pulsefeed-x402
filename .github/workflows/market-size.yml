@@ -95,22 +95,40 @@ jobs:
             ].join("\n") + "\n", { flag: "a" });
           '
 
+      # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
+      # Подстановка ${{ }} происходит ДО запуска шелла — она вклеивает текст прямо в скрипт,
+      # поэтому строка вида ""; rm -rf /; #" в данных становится командой. В demand-monitor
+      # сюда доходил User-Agent постороннего: любой запрос с заголовком X-PAYMENT считался
+      # оплатой, и UA уезжал в payingUa. Раннер имеет contents:write на репозиторий, на
+      # который указывает provenance наших npm-пакетов. Через env значение приходит
+      # переменной и шеллом не разбирается.
       - name: Commit the observation
+        env:
+          SUMMARY: ${{ steps.m.outputs.summary }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/market-size.jsonl
-          git diff --staged --quiet || git commit -m "market-size: ${{ steps.m.outputs.summary }}"
+          git diff --staged --quiet || git commit -m "market-size: $SUMMARY"
           git push
 
+      # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
+      # Подстановка ${{ }} происходит ДО запуска шелла — она вклеивает текст прямо в скрипт,
+      # поэтому строка вида ""; rm -rf /; #" в данных становится командой. В demand-monitor
+      # сюда доходил User-Agent постороннего: любой запрос с заголовком X-PAYMENT считался
+      # оплатой, и UA уезжал в payingUa. Раннер имеет contents:write на репозиторий, на
+      # который указывает provenance наших npm-пакетов. Через env значение приходит
+      # переменной и шеллом не разбирается.
       - name: Raise the flag only when the decision would change
         if: steps.m.outputs.alert == 'true'
         env:
+          SUMMARY: ${{ steps.m.outputs.summary }}
+          DETAIL: ${{ steps.m.outputs.detail }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           BODY=$(printf 'Рынок x402 сдвинулся настолько, что решение от 31.07.2026 стоит пересмотреть.\n\n%s\n\nЗамер сегодня: %s\n\nРяд наблюдений: `data/market-size.jsonl`. Метод и оговорки: `publication/ЭКОНОМИКА-X402-ЗАМЕР.md` в рабочей папке.\n' \
-            "${{ steps.m.outputs.detail }}" "${{ steps.m.outputs.summary }}")
+            "$DETAIL" "$SUMMARY")
           N=$(gh issue list -R "$REPO" --state open --label market-size --limit 1 --json number --jq '.[0].number')
           if [ -n "$N" ]; then
             gh issue comment -R "$REPO" "$N" --body "$BODY"
