@@ -143,8 +143,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/demand.jsonl
+          # Пуш с подтягиванием и повтором. Все шесть сторожей пишут в один и тот же
+          # репозиторий, и при совпадении по времени push падает по конфликту — а он стоит
+          # ПЕРЕД шагом тревоги, то есть неудачная запись данных глушила само оповещение.
+          # Ради этого же ниже стоит `if: always()`: тревога не должна зависеть от того,
+          # удалось ли сохранить ряд наблюдений.
           git diff --staged --quiet || git commit -m "demand: $SUMMARY"
-          git push
+          for i in 1 2 3; do
+            git pull --rebase -q origin master 2>/dev/null || true
+            git push -q origin HEAD && break
+            sleep $((i * 5))
+          done
 
       # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
       # Подстановка ${{ }} происходит ДО запуска шелла — она вклеивает текст прямо в скрипт,
@@ -154,7 +163,7 @@ jobs:
       # который указывает provenance наших npm-пакетов. Через env значение приходит
       # переменной и шеллом не разбирается.
       - name: Raise the flag only when something moved off zero
-        if: steps.m.outputs.alert == 'true'
+        if: always() && steps.m.outputs.alert == 'true'
         env:
           SUMMARY: ${{ steps.m.outputs.summary }}
           DETAIL: ${{ steps.m.outputs.detail }}
