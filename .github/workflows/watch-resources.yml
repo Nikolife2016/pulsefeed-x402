@@ -79,7 +79,42 @@ jobs:
             });
             rows.forEach(r => console.log(JSON.stringify(r)));
 
+            // ── ОПЫТ: нужна ли самооплата ──
+            // Мы платим себе 1,21 USDC в месяц, полагая, что это удерживает нас в каталоге.
+            // Гипотеза не проверена: потолок «последний платёж не старше 30 дней» есть у ВСЕХ
+            // 14 506 записей, но поле lastCalledAt заполнено у всех без исключения, то есть
+            // оно считается по 30-дневному окну и больше показать не может. С 06.08.2026
+            // четырём роутам, не заработавшим ни цента, платить перестали; четырём продуктовым
+            // продолжаем. Пропадут именно безоплатные — выселение реально. Останутся все —
+            // самооплата ритуал, и её можно отключить.
+            const KEEPALIVE = {
+              test:    ["pulse", "whales", "flow", "momentum"],          // платить перестали
+              control: ["trust", "trust/history", "trust/dataset", "data/full"], // платим
+            };
+            const kaRows = [];
+            for (const [group, paths] of Object.entries(KEEPALIVE)) {
+              for (const p of paths) {
+                const url = `https://pulsefeed.dev/${p}`;
+                const r = byUrl.get(url);
+                const q = (r || {}).quality || {};
+                // Отсутствие в каталоге — САМО наблюдение, ради которого опыт и ставится.
+                kaRows.push({ ts, date, group, path: p, present: !!r,
+                  calls30d: r ? (q.l30DaysTotalCalls ?? null) : null,
+                  lastCalledAt: r ? (q.lastCalledAt ?? null) : null });
+              }
+            }
+            const gone = kaRows.filter(r => !r.present);
+            console.log(`опыт keepalive: в каталоге ${kaRows.length - gone.length} из ${kaRows.length}` +
+              (gone.length ? ` — ПРОПАЛИ: ${gone.map(r => r.group + "/" + r.path).join(", ")}` : ""));
+
             mkdirSync("data", { recursive: true });
+            {
+              const kp = "data/watch-keepalive.jsonl";
+              const prevK = existsSync(kp) ? readFileSync(kp, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+              const seenK = new Set(kaRows.map(r => r.ts + "|" + r.path));
+              writeFileSync(kp, [...prevK.filter(r => !seenK.has((r.ts || r.date) + "|" + r.path)), ...kaRows]
+                .map(o => JSON.stringify(o)).join("\n") + "\n");
+            }
             const path = "data/watch-2993.jsonl";
             const prev = existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
             // Дедуп по МЕТКЕ ВРЕМЕНИ, а не по дате: при двухчасовом шаге отбрасывание «дублей
@@ -94,7 +129,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/watch-2993.jsonl
+          git add data/watch-2993.jsonl data/watch-keepalive.jsonl
           # Пуш с подтягиванием и повтором. Все шесть сторожей пишут в один и тот же
           # репозиторий, и при совпадении по времени push падает по конфликту — а он стоит
           # ПЕРЕД шагом тревоги, то есть неудачная запись данных глушила само оповещение.
