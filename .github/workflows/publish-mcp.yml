@@ -30,7 +30,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Ensure npm supports trusted publishing
         run: |
-          npm install -g npm@latest   # OIDC требует npm CLI >= 11.5.1
+          # ЗАКРЕПЛЁННАЯ версия, а не @latest. Этот шаг стоит в задании с правом id-token:
+          # write, то есть с возможностью опубликовать пакет от нашего имени. Тянуть в него
+          # свежайший npm означает исполнять здесь код, который мы не выбирали и не видели.
+          npm install -g npm@11.7.0   # OIDC требует npm CLI >= 11.5.1
           npm --version
       - name: Publish npm package (mcp, skip if version exists)
         working-directory: mcp
@@ -39,7 +42,7 @@ jobs:
           if npm view "pulsefeed-x402-mcp@$V" version >/dev/null 2>&1; then
             echo "pulsefeed-x402-mcp@$V already on npm — skip publish"
           else
-            npm install
+            npm ci || npm install
             npm publish
           fi
       - name: Publish x402-payable (skip if version exists)
