@@ -59,6 +59,14 @@ jobs:
 
             const out = { date: new Date().toISOString().slice(0, 10) };
             const alerts = [];
+            // Уже сообщённые платежи. Без этого один и тот же платёж поднимает тревогу
+            // каждый день, пока не выйдет из окна выборки — 06.08 и 07.08 пришли две
+            // одинаковые тревоги про один перевод от 04.08. Сторож, повторяющий одно и то
+            // же ежедневно, перестают читать, и тогда он не сработает и на настоящем.
+            const SEEN = "data/demand-seen.json";
+            let seen = { txs: [] };
+            try { if (existsSync(SEEN)) seen = JSON.parse(readFileSync(SEEN, "utf8")); } catch { }
+            const seenTx = new Set(seen.txs || []);
 
             // ── A. Платящие сигналы
             const f = await j(`https://pulsefeed.dev/_demand?key=${process.env.DEMAND_KEY}&days=14`);
@@ -68,9 +76,12 @@ jobs:
               out.attempts = pw.attempts; out.impressions = pw.impressions;
               const ua = Object.keys(pw.payingUa || {});
               out.payingUa = ua;
-              // Любой плательщик, кроме нашего собственного клиента, — это первый внешний.
-              const external = ua.filter(k => k !== "node");
-              if (external.length) alerts.push(`🎉 ПЕРВЫЙ ВНЕШНИЙ ПЛАТЕЛЬЩИК в воронке: payingUa = ${JSON.stringify(pw.payingUa)}`);
+              // ПО UA ТРЕВОГУ НЕ ПОДНИМАЕМ. Настоящий покупатель (04.08) пришёл с UA "node" —
+              // тем же, что у нашего keepalive, — то есть признак не различает нас и его.
+              // Зато он ловил любой посторонний curl: две ложные тревоги 06–07.08 подняты
+              // моим же проверочным запросом. Единственный надёжный признак оплаты —
+              // расчёт в цепочке, он ниже. UA оставляем в отчёте как справку.
+              out.payingUaNonNode = ua.filter(k => k !== "node");
             } else { out.funnelError = true; }
 
             const tx = await j(`https://base.blockscout.com/api/v2/addresses/${LEDGER}/token-transfers?type=ERC-20`);
@@ -83,10 +94,13 @@ jobs:
               // пришли с адреса-двойника нашего кошелька.
               const real = ext.filter(i => Number(i.total?.value || 0) / 1e6 >= 0.001);
               out.transfersExternalReal = real.length;
-              if (real.length) {
-                const sum = real.reduce((s, i) => s + Number(i.total.value) / 1e6, 0);
-                alerts.push(`🎉 ВНЕШНИЙ ПЛАТЁЖ ONCHAIN: ${real.length} перевод(ов) на ${sum.toFixed(4)} USDC от ${[...new Set(real.map(i => i.from.hash))].join(", ")}`);
+              const fresh = real.filter(i => !seenTx.has(i.transaction_hash || i.tx_hash || i.hash));
+              if (fresh.length) {
+                const sum = fresh.reduce((s, i) => s + Number(i.total.value) / 1e6, 0);
+                alerts.push(`🎉 НОВЫЙ ВНЕШНИЙ ПЛАТЁЖ: ${fresh.length} перевод(ов) на ${sum.toFixed(4)} USDC от ${[...new Set(fresh.map(i => i.from.hash))].join(", ")}`);
+                for (const i of fresh) seenTx.add(i.transaction_hash || i.tx_hash || i.hash);
               }
+              out.externalPaymentsKnown = seenTx.size;
             } else { out.chainError = true; }
 
             // ── B. Внимание к публикациям
@@ -116,6 +130,7 @@ jobs:
             if (out.health !== "up") alerts.push(`🔴 Сервис отвечает статусом «${out.health}»`);
 
             mkdirSync("data", { recursive: true });
+            writeFileSync(SEEN, JSON.stringify({ txs: [...seenTx] }, null, 1) + "\n");
             const path = "data/demand.jsonl";
             const prev = existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
             writeFileSync(path, [...prev.filter(p => p.date !== out.date), out].map(o => JSON.stringify(o)).join("\n") + "\n");
@@ -142,7 +157,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/demand.jsonl
+          git add data/demand.jsonl data/demand-seen.json
           # Пуш с подтягиванием и повтором. Все шесть сторожей пишут в один и тот же
           # репозиторий, и при совпадении по времени push падает по конфликту — а он стоит
           # ПЕРЕД шагом тревоги, то есть неудачная запись данных глушила само оповещение.
