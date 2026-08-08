@@ -103,6 +103,23 @@ jobs:
                   lastCalledAt: r ? (q.lastCalledAt ?? null) : null });
               }
             }
+            // ── Естественная проверка выселения ──
+            // 343 чужих ресурса, у которых на 08.08 последний платёж был 29+ дней назад.
+            // Если каталог выселяет за неоплату через 30 дней, они исчезнут за сутки-двое.
+            // Это тот же вопрос, что и наш опыт с самооплатой, но на выборке в 86 раз
+            // больше и с ответом через дни, а не через месяц. Своих денег не стоит вовсе.
+            let evictionRow = null;
+            try {
+              const coh = JSON.parse(readFileSync("data/eviction-cohort.json", "utf8"));
+              const alive = coh.urls.filter(u => byUrl.has(u)).length;
+              evictionRow = { ts, date, cohort: coh.urls.length, stillListed: alive,
+                gone: coh.urls.length - alive, catalogSize: items.length };
+              console.log(`когорта выселения: осталось ${alive} из ${coh.urls.length}`);
+              const ep = "data/watch-eviction.jsonl";
+              const prevE = existsSync(ep) ? readFileSync(ep, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+              writeFileSync(ep, [...prevE.filter(r => r.ts !== ts), evictionRow].map(o => JSON.stringify(o)).join("\n") + "\n");
+            } catch { /* когорты нет — наблюдение просто не ведётся */ }
+
             const gone = kaRows.filter(r => !r.present);
             console.log(`опыт keepalive: в каталоге ${kaRows.length - gone.length} из ${kaRows.length}` +
               (gone.length ? ` — ПРОПАЛИ: ${gone.map(r => r.group + "/" + r.path).join(", ")}` : ""));
@@ -129,7 +146,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/watch-2993.jsonl data/watch-keepalive.jsonl
+          git add data/watch-2993.jsonl data/watch-keepalive.jsonl data/watch-eviction.jsonl
           # Пуш с подтягиванием и повтором. Все шесть сторожей пишут в один и тот же
           # репозиторий, и при совпадении по времени push падает по конфликту — а он стоит
           # ПЕРЕД шагом тревоги, то есть неудачная запись данных глушила само оповещение.
