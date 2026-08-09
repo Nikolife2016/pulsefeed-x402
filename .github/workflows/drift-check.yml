@@ -1,0 +1,19 @@
+# Проверяем собственные зависимости тем же инструментом, который предлагаем другим.
+# Смысл в расписании, а не в pull request: дрейф случается между коммитами, поэтому
+# проверка «при пуше» его по определению не увидит.
+name: drift-check
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Nikolife2016/mcp-drift-action@v1
+        with:
+          fail-on: high
