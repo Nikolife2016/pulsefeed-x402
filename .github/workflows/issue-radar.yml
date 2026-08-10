@@ -74,16 +74,21 @@ jobs:
               // Каждый угол требует ПРЯМОГО признака, а не косвенного. Слабое совпадение —
               // это ложное срабатывание, а обещать помощь там, где её нет, хуже молчания.
               const angles = [];
-              if (/payment-?required|challenge[^.]{0,40}(header|body)|(header|body)[^.]{0,40}challenge/.test(text))
-                angles.push("v2 держит челлендж в заголовке PAYMENT-REQUIRED, тело — деталь реализации; у нас есть замеры по 5.6k эндпоинтов");
+              // ⛔ Здесь была круговая проверка: ветки ищутся запросом '"PAYMENT-REQUIRED"',
+              // и та же строка засчитывалась как признак пользы. Совпадение было
+              // гарантировано у КАЖДОЙ находки, и один довод уезжал в семь веток подряд,
+              // включая те, где мы ничем не полезны. Признаком считаем только явное
+              // противопоставление «заголовок против тела», а не название статуса 402.
+              if (/challenge[^.]{0,60}\b(header|body)\b|\b(header|body)\b[^.]{0,60}challenge|accepts[^.]{0,40}\bbody\b|header[^.]{0,30}(instead|rather) than[^.]{0,30}body/.test(text))
+                angles.push("в v2 челлендж лежит в заголовке PAYMENT-REQUIRED, тело — деталь реализации; у нас есть проба по всему каталогу, свежие числа в https://pulsefeed.dev/status.json");
               if (/(returns?|returning|stopped)[^.]{0,30}402|no accepts|empty body|\b(dead|unreachable|stale)\b[^.]{0,30}(endpoint|resource|service)/.test(text))
-                angles.push("живость: npx x402-payable <url> покажет, на чём именно ломается, плюс наша история наблюдений");
+                angles.push("живость: npx x402-payable <url> покажет, на чём именно ломается, плюс наша история наблюдений по этому эндпоинту");
               if (/\bupto\b|auth-?capture|batch-?settlement/.test(text))
                 angles.push("у upto/auth-capture amount — потолок авторизации, а не цена вызова; мы на этом ошиблись и исправились");
               if (/\bpayto\b/.test(text))
                 angles.push("смены получателя и адреса-двойники — есть хронология по каждому эндпоинту");
               if (/\b(testnet|sepolia|devnet)\b/.test(text))
-                angles.push("тестнет, выставленный как боевой сервис с ценой в долларах — 29 таких в индексе");
+                angles.push("тестнет, выставленный как боевой сервис с ценой в долларах — есть поимённый список, свежее число в https://pulsefeed.dev/status.json");
               if (/\bdecimals\b/.test(text))
                 angles.push("decimals по сетям: USDC 6 везде, кроме BSC (18)");
               if (/description[^.]{0,40}(long|length|limit)|too long/.test(text))
@@ -92,6 +97,8 @@ jobs:
               rows.set(o.u, `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  чем полезны: ${angles.slice(0,2).join("; ")}`);
             }
             fs.writeFileSync("/tmp/found.md", [...rows.values()].slice(0, 12).join("\n"));
+            // Радар только НАХОДИТ ветки. Доводы — гипотеза совпадения по тексту,
+            // а не проверенный факт: перед ответом сверять с реальными данными.
             console.log("новых кандидатов:", rows.size);
           '
 
