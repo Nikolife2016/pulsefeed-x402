@@ -53,52 +53,101 @@ jobs:
             : > /tmp/seen.txt
           fi
 
+          # Каталог CDP Bazaar — опора подбора. Публичный, без авторизации.
+          # Если не прочитался, выпуск не делаем вовсе: без каталога подбор
+          # выродится в «принесли всё подряд», а это ровно то, от чего уходим.
+          node -e '
+            (async () => {
+              const out = [];
+              for (let off = 0; off < 25000; off += 1000) {
+                const r = await fetch(`https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=1000&offset=${off}`).catch(() => null);
+                if (!r || !r.ok) break;
+                const j = await r.json();
+                const it = j.items || [];
+                for (const x of it) out.push({ resource: x.resource, quality: x.quality });
+                if (!it.length || (j.pagination && j.pagination.total && off + it.length >= j.pagination.total)) break;
+              }
+              require("fs").writeFileSync("/tmp/catalog.json", JSON.stringify(out));
+              console.log("каталог: " + out.length + " строк");
+            })();
+          '
+          if [ ! -s /tmp/catalog.json ]; then
+            echo "каталог не прочитан — выпуск пропускаем"
+            exit 0
+          fi
+
           node -e '
             const fs = require("fs");
             const seen = fs.existsSync("/tmp/seen.txt") ? fs.readFileSync("/tmp/seen.txt","utf8") : "";
             // Репозитории-шумелки: спам-фабрики и автогенерируемые ленты. Список растёт по факту.
             const NOISE = /rsi-eaf|social-feed|^bot-|awesome-stars|-mirror$/i;
             const rows = new Map();
+
+            // ═══ ПЕРЕПИСАНО 13.08.2026: доводов по ключевым словам больше нет ═══
+            //
+            // Было семь «углов»: каждый совпадал со словом в тексте и приписывал ветке
+            // готовую фразу «чем мы полезны». Проверено на корпусе из 123 веток за месяц,
+            // с разбором каждого срабатывания по существу:
+            //
+            //   довод              срабатывал  реально применим
+            //   upto/auth-capture      29            1   (3%)
+            //   тестнет                21            0   (0%)
+            //   живость                20            0   (0%)
+            //   заголовок               9            0   (0%)
+            //   смена получателя        5            2
+            //   decimals                2            1
+            //   длина description       2            1
+            //                        ────         ────
+            //                          88            4   (5%)
+            //
+            // Причина не в шаблонах — сужение «заголовка» 10.08 срезало срабатывания
+            // втрое, а применимость осталась нулевой. Причина в природе доводов: почти
+            // все они пересказывают спецификацию, которую человек в ветке уже прочитал
+            // внимательнее нас. Прийти с таким — потратить чужое время.
+            //
+            // Осталась ОДНА проверка, и она про то, чего у собеседника нет: называет ли
+            // ветка эндпоинт, который числится в каталоге. Если да — мы можем сказать,
+            // что он отдаёт на самом деле и что о нём записано, а это уже наблюдение,
+            // а не пересказ. На том же корпусе: 12 веток из 123, и среди них обе, что
+            // были отобраны вручную как стоящие ответа.
+            const CAT = JSON.parse(fs.readFileSync("/tmp/catalog.json","utf8"));
+            const byHost = new Map();
+            for (const x of CAT) {
+              let h; try { h = new URL(x.resource).hostname.replace(/^www\./,""); } catch { continue; }
+              if (!byHost.has(h)) byHost.set(h, []);
+              byHost.get(h).push(x);
+            }
+
             for (const line of fs.readFileSync("/tmp/raw.jsonl","utf8").split("\n")) {
               if (!line.trim()) continue;
               let o; try { o = JSON.parse(line); } catch { continue; }
               if (NOISE.test(o.r)) continue;
               if (o.r === process.env.GITHUB_REPOSITORY) continue;     // свои не считаем
               if (seen.includes(o.u)) continue;                        // уже приносили
-              const text = (o.t + " " + (o.b||"")).toLowerCase().slice(0, 4000);
-              // Чем именно мы полезны в этой ветке — если ничем, не приносим вовсе.
+              const raw = o.t + " " + (o.b||"");
+              const text = raw.toLowerCase().slice(0, 4000);
               // Тема должна быть про x402, иначе это чужой 402 из другой оперы (биллинг,
               // квоты API). Ловили MiQi#528 про нехватку баланса и swap-риски — не наше.
-              const aboutX402 = /x402|payment-?required|\bpayto\b|facilitator|bazaar/.test(text);
-              if (!aboutX402) continue;
-              // Каждый угол требует ПРЯМОГО признака, а не косвенного. Слабое совпадение —
-              // это ложное срабатывание, а обещать помощь там, где её нет, хуже молчания.
-              const angles = [];
-              // ⛔ Здесь была круговая проверка: ветки ищутся запросом '"PAYMENT-REQUIRED"',
-              // и та же строка засчитывалась как признак пользы. Совпадение было
-              // гарантировано у КАЖДОЙ находки, и один довод уезжал в семь веток подряд,
-              // включая те, где мы ничем не полезны. Признаком считаем только явное
-              // противопоставление «заголовок против тела», а не название статуса 402.
-              if (/challenge[^.]{0,60}\b(header|body)\b|\b(header|body)\b[^.]{0,60}challenge|accepts[^.]{0,40}\bbody\b|header[^.]{0,30}(instead|rather) than[^.]{0,30}body/.test(text))
-                angles.push("в v2 челлендж лежит в заголовке PAYMENT-REQUIRED, тело — деталь реализации; у нас есть проба по всему каталогу, свежие числа в https://pulsefeed.dev/status.json");
-              if (/(returns?|returning|stopped)[^.]{0,30}402|no accepts|empty body|\b(dead|unreachable|stale)\b[^.]{0,30}(endpoint|resource|service)/.test(text))
-                angles.push("живость: npx x402-payable <url> покажет, на чём именно ломается, плюс наша история наблюдений по этому эндпоинту");
-              if (/\bupto\b|auth-?capture|batch-?settlement/.test(text))
-                angles.push("у upto/auth-capture amount — потолок авторизации, а не цена вызова; мы на этом ошиблись и исправились");
-              // Было просто /\bpayto\b/ — совпадение с любым УПОМИНАНИЕМ поля. Срабатывало
-              // на 6 ветках из 10, и пять из них — репозиторий, где строят свой каталог и
-              // payTo стоит как имя поля в схеме. Требуем, чтобы речь шла о СМЕНЕ или
-              // несовпадении получателя: 6 → 2, и обе оставшиеся по делу.
-              if (/\bpayto\b[^.]{0,80}(chang|rotat|mismatch|hijack|differ|swap|wrong|unexpected|imposter|look-?alike)|(chang|rotat|mismatch|hijack|differ|swap|wrong|unexpected|imposter|look-?alike)[^.]{0,80}\bpayto\b/.test(text))
-                angles.push("смены получателя и адреса-двойники — есть хронология по каждому эндпоинту");
-              if (/\b(testnet|sepolia|devnet)\b/.test(text))
-                angles.push("тестнет, выставленный как боевой сервис с ценой в долларах — есть поимённый список, свежее число в https://pulsefeed.dev/status.json");
-              if (/\bdecimals\b/.test(text))
-                angles.push("decimals по сетям: USDC 6 везде, кроме BSC (18)");
-              if (/description[^.]{0,40}(long|length|limit)|too long/.test(text))
-                angles.push("длина description ломает оплату молча: замерено 436 симв. — ок, 588 и 646 — «Failed to verify payment: 400»");
-              if (!angles.length) continue;
-              rows.set(o.u, `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  чем полезны: ${angles.slice(0,2).join("; ")}`);
+              if (!/x402|payment-?required|\bpayto\b|facilitator|bazaar/.test(text)) continue;
+
+              // Ищем в тексте ссылки на хосты, которые есть в каталоге.
+              const hostsFound = new Set();
+              for (const m of raw.matchAll(/https?:\/\/([a-z0-9.-]+\.[a-z]{2,})/gi)) {
+                const h = m[1].toLowerCase().replace(/^www\./,"");
+                if (byHost.has(h)) hostsFound.add(h);
+              }
+              if (!hostsFound.size) continue;   // нечего сказать по делу — не приносим
+
+              // Что именно мы можем сказать про этот хост: числа из каталога плюс наша
+              // готовность пробить его прямо сейчас. Всё проверяемое, ничего обещанного.
+              const parts = [];
+              for (const h of [...hostsFound].slice(0, 2)) {
+                const rs = byHost.get(h);
+                const calls = rs.reduce((a, x) => a + ((x.quality && x.quality.l30DaysTotalCalls) || 0), 0);
+                const payers = Math.max(...rs.map(x => (x.quality && x.quality.l30DaysUniquePayers) || 0));
+                parts.push(`${h}: ${rs.length} листинг(ов) в Bazaar, оплаченных вызовов за 30 дней ${calls}, уникальных плательщиков ${payers}`);
+              }
+              rows.set(o.u, `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  у нас есть данные по названному эндпоинту: ${parts.join("; ")}`);
             }
             fs.writeFileSync("/tmp/found.md", [...rows.values()].slice(0, 12).join("\n"));
             // Радар только НАХОДИТ ветки. Доводы — гипотеза совпадения по тексту,
@@ -109,7 +158,7 @@ jobs:
           NOTHING_NEW=0
           [ -s /tmp/found.md ] || { echo "новых кандидатов нет"; NOTHING_NEW=1; }
 
-          BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Радар только НАХОДИТ ветки. Строка «чем полезны» — догадка по совпадению слов, а не проверенный факт: сверять с данными перед ответом. Ответ пишется вручную и от лица владельца; посты радар не делает._\n' \
+          BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Ветка попадает сюда, только если называет эндпоинт из каталога Bazaar, по которому у нас есть наблюдения. Доводов по ключевым словам больше нет: их проверили на 123 ветках — 88 срабатываний, применимы 4. Ответ пишется вручную и от лица владельца; посты радар не делает._\n' \
             "$(date -u +%F)" "$(cat /tmp/found.md)")
 
           if [ -n "$TRACKER" ] && [ "$NOTHING_NEW" = "0" ]; then
