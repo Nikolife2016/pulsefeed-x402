@@ -85,7 +85,11 @@ jobs:
                 angles.push("живость: npx x402-payable <url> покажет, на чём именно ломается, плюс наша история наблюдений по этому эндпоинту");
               if (/\bupto\b|auth-?capture|batch-?settlement/.test(text))
                 angles.push("у upto/auth-capture amount — потолок авторизации, а не цена вызова; мы на этом ошиблись и исправились");
-              if (/\bpayto\b/.test(text))
+              // Было просто /\bpayto\b/ — совпадение с любым УПОМИНАНИЕМ поля. Срабатывало
+              // на 6 ветках из 10, и пять из них — репозиторий, где строят свой каталог и
+              // payTo стоит как имя поля в схеме. Требуем, чтобы речь шла о СМЕНЕ или
+              // несовпадении получателя: 6 → 2, и обе оставшиеся по делу.
+              if (/\bpayto\b[^.]{0,80}(chang|rotat|mismatch|hijack|differ|swap|wrong|unexpected|imposter|look-?alike)|(chang|rotat|mismatch|hijack|differ|swap|wrong|unexpected|imposter|look-?alike)[^.]{0,80}\bpayto\b/.test(text))
                 angles.push("смены получателя и адреса-двойники — есть хронология по каждому эндпоинту");
               if (/\b(testnet|sepolia|devnet)\b/.test(text))
                 angles.push("тестнет, выставленный как боевой сервис с ценой в долларах — есть поимённый список, свежее число в https://pulsefeed.dev/status.json");
@@ -105,7 +109,7 @@ jobs:
           NOTHING_NEW=0
           [ -s /tmp/found.md ] || { echo "новых кандидатов нет"; NOTHING_NEW=1; }
 
-          BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Ответ пишется вручную и от лица владельца. Радар только находит ветки; посты он не делает._\n' \
+          BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Радар только НАХОДИТ ветки. Строка «чем полезны» — догадка по совпадению слов, а не проверенный факт: сверять с данными перед ответом. Ответ пишется вручную и от лица владельца; посты радар не делает._\n' \
             "$(date -u +%F)" "$(cat /tmp/found.md)")
 
           if [ -n "$TRACKER" ] && [ "$NOTHING_NEW" = "0" ]; then
