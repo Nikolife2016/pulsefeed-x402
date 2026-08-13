@@ -79,6 +79,15 @@ jobs:
           node -e '
             const fs = require("fs");
             const seen = fs.existsSync("/tmp/seen.txt") ? fs.readFileSync("/tmp/seen.txt","utf8") : "";
+            // Если история трекера не прочиталась (сеть, права, обрезка выдачи), seen
+            // окажется пустым или куцым — и радар принесёт заново всё, что уже приносил.
+            // Лучше пропустить день, чем выдать 127 старых веток как новые. Порог мягкий:
+            // на 13.08.2026 в истории 18 выпусков и 127 ссылок.
+            const seenLinks = (seen.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/g) || []).length;
+            if (seenLinks < 20) {
+              console.log("история трекера прочитана частично (" + seenLinks + " ссылок) — выпуск пропускаем");
+              process.exit(0);
+            }
             // Репозитории-шумелки: спам-фабрики и автогенерируемые ленты. Список растёт по факту.
             const NOISE = /rsi-eaf|social-feed|^bot-|awesome-stars|-mirror$/i;
             const rows = new Map();
@@ -123,7 +132,14 @@ jobs:
               let o; try { o = JSON.parse(line); } catch { continue; }
               if (NOISE.test(o.r)) continue;
               if (o.r === process.env.GITHUB_REPOSITORY) continue;     // свои не считаем
-              if (seen.includes(o.u)) continue;                        // уже приносили
+              // «Уже приносили» — проверка по ГРАНИЦЕ номера, а не подстрокой.
+              // Было seen.includes(o.u): как только в истории появлялась .../issues/1055,
+              // ветки .../issues/105, /10 и /1 того же репозитория глушились навсегда —
+              // их URL является подстрокой длинного. Дублей это не создавало (ошибка в
+              // обратную сторону), но новые ветки с коротким номером терялись молча.
+              // Проверено синтетически: #1055 в истории отсеивал #105, #10 и #1.
+              const seenRe = new RegExp(o.u.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![0-9])");
+              if (seenRe.test(seen)) continue;
               const raw = o.t + " " + (o.b||"");
               const text = raw.toLowerCase().slice(0, 4000);
               // Тема должна быть про x402, иначе это чужой 402 из другой оперы (биллинг,
