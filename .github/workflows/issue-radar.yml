@@ -12,6 +12,14 @@ on:
     - cron: "17 9 * * *"     # раз в сутки
   workflow_dispatch:
 
+# Шаг устроен как чтение-правка-запись: историю читаем в начале, комментарий постим
+# в конце, между ними пять обращений к поиску и обход каталога — окно в минуты.
+# Без этой группы ручной запуск поверх планового прочитает ту же историю и
+# опубликует тот же выпуск дважды; отсев по seen такое не ловит принципиально.
+concurrency:
+  group: issue-radar
+  cancel-in-progress: false
+
 permissions:
   issues: write
 
@@ -31,7 +39,7 @@ jobs:
           # аудитория, для которой мы что-то значим.
           gh api -X GET search/issues \
             -f q="repo:x402-foundation/x402 is:issue is:open created:>$SINCE" \
-            -f per_page=30 --jq '.items[] | {n:.number, r:"x402-foundation/x402", t:.title, u:.html_url, b:(.body // "")}' > /tmp/raw.jsonl || true
+            -f sort=created -f order=desc -f per_page=100 --jq '.items[] | {n:.number, r:"x402-foundation/x402", t:.title, u:.html_url, b:(.body // "")}' > /tmp/raw.jsonl || true
 
           # Широкий поиск по признакам вопроса, а не по слову «x402».
           for Q in \
@@ -39,8 +47,16 @@ jobs:
             'x402 "402" (dead OR unreachable OR invalid OR "not detected") is:issue is:open' \
             'x402 (payTo OR "pay to") (changed OR verify OR check) is:issue is:open' \
             'x402 (scheme OR "upto" OR "auth-capture") is:issue is:open' ; do
-            gh api -X GET search/issues -f q="$Q created:>$SINCE" -f per_page=20 \
-              --jq '.items[] | {n:.number, r:(.repository_url|split("/")|.[-2:]|join("/")), t:.title, u:.html_url, b:(.body // "")}' >> /tmp/raw.jsonl || true
+            # Сортировка по дате создания, а не по «релевантности»: при 827 совпадениях
+            # первая страница best match — это 2,4% выдачи, и годные ветки не всплывают
+            # ни на второй день, ни на третий (порядок ранга стабилен, проверено).
+            # Три страницы по 100 — компромисс: полностью такой запрос не вычерпать,
+            # но отбор теперь держит каталог, поэтому широта стоит только времени.
+            for PAGE in 1 2 3; do
+              gh api -X GET search/issues -f q="$Q created:>$SINCE" -f sort=created -f order=desc \
+                -f per_page=100 -f page="$PAGE" \
+                --jq '.items[] | {n:.number, r:(.repository_url|split("/")|.[-2:]|join("/")), t:.title, u:.html_url, b:(.body // "")}' >> /tmp/raw.jsonl || true
+            done
           done
 
           # Отсев шума и уже виденного.
@@ -49,8 +65,15 @@ jobs:
           if [ -n "$TRACKER" ]; then
             { gh issue view "$TRACKER" -R "$REPO" --json body --jq '.body';
               gh issue view "$TRACKER" -R "$REPO" --json comments --jq '.comments[].body'; } > /tmp/seen.txt 2>/dev/null || : > /tmp/seen.txt
+            # Сверка целостности: сколько тел комментариев прочли против их числа по API.
+            # Неполная история молча ослабляет отсев и выдаёт уже принесённое как новое.
+            gh issue view "$TRACKER" -R "$REPO" --json comments --jq '.comments | length' > /tmp/seen-got.txt 2>/dev/null || echo 0 > /tmp/seen-got.txt
+            gh api "repos/$REPO/issues/$TRACKER" --jq '.comments' > /tmp/seen-want.txt 2>/dev/null || echo 0 > /tmp/seen-want.txt
           else
             : > /tmp/seen.txt
+            # Трекера нет — это первый запуск или его удалили. Ноль/ноль означает
+            # «сверять нечего», и ветка создания трекера ниже остаётся достижимой.
+            echo 0 > /tmp/seen-got.txt; echo 0 > /tmp/seen-want.txt
           fi
 
           # Каталог CDP Bazaar — опора подбора. Публичный, без авторизации.
@@ -79,15 +102,29 @@ jobs:
           node -e '
             const fs = require("fs");
             const seen = fs.existsSync("/tmp/seen.txt") ? fs.readFileSync("/tmp/seen.txt","utf8") : "";
-            // Если история трекера не прочиталась (сеть, права, обрезка выдачи), seen
-            // окажется пустым или куцым — и радар принесёт заново всё, что уже приносил.
-            // Лучше пропустить день, чем выдать 127 старых веток как новые. Порог мягкий:
-            // на 13.08.2026 в истории 18 выпусков и 127 ссылок.
+            // Если история трекера прочиталась НЕ ЦЕЛИКОМ (сеть, права, обрезка выдачи),
+            // отсев ослабнет и радар принесёт заново то, что уже приносил.
+            // Порог-константа тут не годится: при истории в 128 ссылок обрывок из 24
+            // спокойно проходил «больше двадцати» и давал 4 повтора — замерено.
+            // Сравниваем с ПРОШЛЫМ замером: он лежит в data/radar-seen-count.txt и
+            // растёт вместе с историей. Падение больше чем на четверть — признак
+            // неполного чтения, а не того, что ветки кончились.
             const seenLinks = (seen.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/g) || []).length;
-            if (seenLinks < 20) {
-              console.log("история трекера прочитана частично (" + seenLinks + " ссылок) — выпуск пропускаем");
-              process.exit(0);
+            // Целостность проверяем не порогом, а сверкой: сколько тел комментариев мы
+            // реально прочли против того, сколько их числится у ветки по данным API.
+            // Файл состояния тут не годится — в воркфлоу нет actions/checkout, каталога
+            // data в раннере нет вовсе (по той же причине никогда не работал radar-skip.txt).
+            const got  = Number((fs.readFileSync("/tmp/seen-got.txt","utf8")||"0").trim()) || 0;
+            const want = Number((fs.readFileSync("/tmp/seen-want.txt","utf8")||"0").trim()) || 0;
+            const historyBroken = want > 0 && got < want;
+            if (historyBroken) {
+              // Пустой found.md — шелл ниже сам поймёт, что публиковать нечего.
+              // Выходить здесь process.exit нельзя: тогда становится недостижимой
+              // ветка создания трекера с нуля, и радар молчит навсегда.
+              fs.writeFileSync("/tmp/found.md", "");
+              console.log("история прочитана частично: " + got + " комментариев из " + want + " (" + seenLinks + " ссылок) — выпуск пропускаем");
             }
+
             // Репозитории-шумелки: спам-фабрики и автогенерируемые ленты. Список растёт по факту.
             const NOISE = /rsi-eaf|social-feed|^bot-|awesome-stars|-mirror$/i;
             const rows = new Map();
@@ -165,9 +202,17 @@ jobs:
               }
               rows.set(o.u, `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  у нас есть данные по названному эндпоинту: ${parts.join("; ")}`);
             }
-            fs.writeFileSync("/tmp/found.md", [...rows.values()].slice(0, 12).join("\n"));
-            // Радар только НАХОДИТ ветки. Доводы — гипотеза совпадения по тексту,
-            // а не проверенный факт: перед ответом сверять с реальными данными.
+            // Кап в 12 строк держит комментарий читаемым, но раньше остаток пропадал
+            // молча: он не публикуется, значит и в историю отсева не попадает, а завтра
+            // его снова вытеснит тот же порядок. Теперь хвост хотя бы назван числом.
+            if (!historyBroken) {
+              const all = [...rows.values()];
+              const head = all.slice(0, 12);
+              if (all.length > head.length)
+                head.push("\n_Ещё " + (all.length - head.length) + " веток подошли, но не поместились в выпуск — придут завтра._");
+              fs.writeFileSync("/tmp/found.md", head.join("\n"));
+            }
+            // Радар только НАХОДИТ ветки. Пост он не делает.
             console.log("новых кандидатов:", rows.size);
           '
 
@@ -200,7 +245,11 @@ jobs:
           # трекера и только комментарии за последние 7 суток.
           SINCE=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
           { gh issue view "$TRACKER" -R "$REPO" --json body --jq '.body';
-            gh api "repos/$REPO/issues/$TRACKER/comments" \
+            # --paginate обязателен: без него REST отдаёт 30 самых СТАРЫХ комментариев,
+            # а окно фильтра — самые свежие. Проверено на чужой ветке: 30 против 511.
+            # При нынешнем темпе трекер перевалит за 30 около 23.08.2026, и счётчик
+            # в заголовке начал бы врать в меньшую сторону.
+            gh api --paginate "repos/$REPO/issues/$TRACKER/comments" \
               --jq "[.[] | select(.created_at > \"$SINCE\")] | .[].body";
             cat /tmp/found.md 2>/dev/null; } \
             | grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' | sort -u > /tmp/all-urls.txt
@@ -213,7 +262,9 @@ jobs:
             N=$(printf '%s' "$U" | sed -E 's#.*/issues/([0-9]+).*#\1#')
             # Ошибка запроса трактуется как «не отвечали»: лишняя строка в счётчике безвреднее
             # пропущенной ветки.
-            MINE=$(gh api "repos/$R/issues/$N/comments" --jq '[.[] | select(.user.login=="Nikolife2016")] | length' 2>/dev/null || echo 0)
+            # Тот же предел в 30: на оживлённой ветке наш ответ дальше 30-го комментария
+            # не находился бы, и она навсегда числилась бы «ждёт ответа».
+            MINE=$(gh api --paginate "repos/$R/issues/$N/comments" --jq '[.[] | select(.user.login=="Nikolife2016")] | length' 2>/dev/null || echo 0)
             [ "${MINE:-0}" -eq 0 ] && PEND=$((PEND+1))
           done < /tmp/all-urls.txt
           # Согласование числительного: заголовок читают каждый день, и «1 веток» выглядит
