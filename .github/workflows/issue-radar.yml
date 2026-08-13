@@ -22,11 +22,17 @@ concurrency:
 
 permissions:
   issues: write
+  contents: read     # только чтение: нужен checkout ради data/radar-skip.txt
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
+      # Без этого шага каталога data/ в раннере нет вовсе, и проверка
+      # `grep -qxF "$U" data/radar-skip.txt` молча не срабатывала ни разу:
+      # шесть сознательно отброшенных веток продолжали числиться ждущими ответа.
+      - uses: actions/checkout@v4
+
       - name: Find questions we can actually answer
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,8 +118,9 @@ jobs:
             const seenLinks = (seen.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/g) || []).length;
             // Целостность проверяем не порогом, а сверкой: сколько тел комментариев мы
             // реально прочли против того, сколько их числится у ветки по данным API.
-            // Файл состояния тут не годится — в воркфлоу нет actions/checkout, каталога
-            // data в раннере нет вовсе (по той же причине никогда не работал radar-skip.txt).
+            // Файл состояния тут не годится: чтобы его обновлять, раннеру понадобилось бы
+            // право записи в репозиторий, а он уже был вектором RCE — лишнего доступа не даём.
+            // Сверка «прочитано против всего» не требует ни состояния, ни новых прав.
             const got  = Number((fs.readFileSync("/tmp/seen-got.txt","utf8")||"0").trim()) || 0;
             const want = Number((fs.readFileSync("/tmp/seen-want.txt","utf8")||"0").trim()) || 0;
             const historyBroken = want > 0 && got < want;
@@ -260,10 +267,13 @@ jobs:
             [ -f "$SKIP" ] && grep -qxF "$U" "$SKIP" && continue
             R=$(printf '%s' "$U" | sed -E 's#https://github.com/([^/]+/[^/]+)/issues/([0-9]+).*#\1#')
             N=$(printf '%s' "$U" | sed -E 's#.*/issues/([0-9]+).*#\1#')
-            # Ошибка запроса трактуется как «не отвечали»: лишняя строка в счётчике безвреднее
-            # пропущенной ветки.
-            # Тот же предел в 30: на оживлённой ветке наш ответ дальше 30-го комментария
-            # не находился бы, и она навсегда числилась бы «ждёт ответа».
+            # Ветка могла исчезнуть: репозиторий удалён или закрыт — тогда 404/410.
+            # Раньше такая ошибка трактовалась как «не отвечали», и мёртвые ветки
+            # копились в счётчике навсегда. Ответить на них нельзя, значит и не ждут.
+            CODE=$(gh api "repos/$R/issues/$N" --jq '.number' >/dev/null 2>&1 && echo ok || echo gone)
+            [ "$CODE" = "gone" ] && continue
+            # --paginate обязателен: без него отдаются 30 самых старых комментариев,
+            # и на оживлённой ветке наш ответ просто не находился бы.
             MINE=$(gh api --paginate "repos/$R/issues/$N/comments" --jq '[.[] | select(.user.login=="Nikolife2016")] | length' 2>/dev/null || echo 0)
             [ "${MINE:-0}" -eq 0 ] && PEND=$((PEND+1))
           done < /tmp/all-urls.txt
