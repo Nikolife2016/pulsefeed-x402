@@ -686,3 +686,7 @@
 {"ts":"2026-08-18T09:07:08.518Z","date":"2026-08-18","url":"https://402.com.tr/api/x402/paymaster-check","present":true,"descLen":494,"calls30d":11,"payers30d":1,"lastCalledAt":"2026-08-06T05:51:24.89Z"}
 {"ts":"2026-08-18T09:07:08.518Z","date":"2026-08-18","url":"https://402.com.tr/api/x402/morpho-health","present":true,"descLen":490,"calls30d":8,"payers30d":1,"lastCalledAt":"2026-08-17T03:01:40.281Z"}
 {"ts":"2026-08-18T09:07:08.518Z","date":"2026-08-18","url":"https://402.com.tr/api/x402/gas-payer","present":true,"descLen":483,"calls30d":2,"payers30d":1,"lastCalledAt":"2026-07-30T12:17:00.691Z"}
+{"ts":"2026-08-18T11:00:02.263Z","date":"2026-08-18","url":"https://402.com.tr/api/x402/safe-check","present":true,"descLen":469,"calls30d":2,"payers30d":1,"lastCalledAt":"2026-08-02T09:24:18.624Z"}
+{"ts":"2026-08-18T11:00:02.263Z","date":"2026-08-18","url":"https://402.com.tr/api/x402/paymaster-check","present":true,"descLen":494,"calls30d":11,"payers30d":1,"lastCalledAt":"2026-08-06T05:51:24.89Z"}
+{"ts":"2026-08-18T11:00:02.263Z","date":"2026-08-18","url":"https://402.com.tr/api/x402/morpho-health","present":true,"descLen":490,"calls30d":8,"payers30d":1,"lastCalledAt":"2026-08-17T03:01:40.281Z"}
+{"ts":"2026-08-18T11:00:02.263Z","date":"2026-08-18","url":"https://402.com.tr/api/x402/gas-payer","present":true,"descLen":483,"calls30d":2,"payers30d":1,"lastCalledAt":"2026-07-30T12:17:00.691Z"}
