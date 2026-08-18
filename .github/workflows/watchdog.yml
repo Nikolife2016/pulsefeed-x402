@@ -140,12 +140,27 @@ jobs:
           TITLE="watchdog: pulsefeed.dev needs attention"
           BODY=$(printf 'Automated external check failed at %s UTC.\n%b\n\n---\nTLS days left: %s · domain days left: %s · buyer wallet: %s USDC\n\nRe-run: Actions → watchdog → Run workflow. This issue is updated in place while the condition persists and closed automatically once every check passes.\n' \
             "$(date -u +%FT%TZ)" "$DETAIL" "$TLS_DAYS" "$DOMAIN_DAYS" "$WALLET_USDC")
-          EXISTING=$(gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number')
+          # GitHub иногда отдаёт 503, и это НЕ авария нашего сервиса. Шаг идёт под bash -e,
+          # поэтому единственный сбой чужого API красил весь прогон сторожа в красное:
+          # 17.08.2026 два прогона помечены failure при всех пройденных проверках.
+          # Повторяем трижды с паузой; исход возвращаем кодом, решение принимает вызывающий.
+          gh_retry() {
+            local i
+            for i in 1 2 3; do
+              if "$@"; then return 0; fi
+              echo "::warning::обращение к GitHub API не удалось (попытка $i/3): $*"
+              sleep $((i * 5))
+            done
+            return 1
+          }
+          EXISTING=$(gh_retry gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number') || EXISTING=""
           if [ -n "$EXISTING" ]; then
-            gh issue comment -R "$REPO" "$EXISTING" --body "$BODY"
+            gh_retry gh issue comment -R "$REPO" "$EXISTING" --body "$BODY" || {
+              echo "::error::сервис не прошёл проверку, но уведомить не удалось — GitHub API недоступен"; exit 1; }
           else
             gh label create -R "$REPO" watchdog --color B60205 --description "Automated external health check" 2>/dev/null || true
-            gh issue create -R "$REPO" --title "$TITLE" --label watchdog --body "$BODY"
+            gh_retry gh issue create -R "$REPO" --title "$TITLE" --label watchdog --body "$BODY" || {
+              echo "::error::сервис не прошёл проверку, но завести тревогу не удалось — GitHub API недоступен"; exit 1; }
           fi
 
       # ВНИМАНИЕ. Значения шагов передаются через env, а НЕ через ${{ }} внутри run.
@@ -164,8 +179,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          N=$(gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number')
+          # GitHub иногда отдаёт 503, и это НЕ авария нашего сервиса. Шаг идёт под bash -e,
+          # поэтому единственный сбой чужого API красил весь прогон сторожа в красное:
+          # 17.08.2026 два прогона помечены failure при всех пройденных проверках.
+          # Повторяем трижды с паузой; исход возвращаем кодом, решение принимает вызывающий.
+          gh_retry() {
+            local i
+            for i in 1 2 3; do
+              if "$@"; then return 0; fi
+              echo "::warning::обращение к GitHub API не удалось (попытка $i/3): $*"
+              sleep $((i * 5))
+            done
+            return 1
+          }
+          # Закрытие тревоги — уборка, а не измерение: если GitHub недоступен, следующий
+          # прогон через 20 минут закроет. Ронять из-за этого прогон нельзя — красный
+          # сторож при исправном сервисе обесценивает сам сигнал.
+          N=$(gh_retry gh issue list -R "$REPO" --state open --label watchdog --limit 1 --json number --jq '.[0].number') || {
+            echo "::warning::GitHub API недоступен — тревогу закроет следующий прогон"; exit 0; }
           if [ -n "$N" ]; then
-            gh issue comment -R "$REPO" "$N" --body "Recovered — all checks passed at $(date -u +%FT%TZ) UTC. TLS $TLS_DAYSd, domain $DOMAIN_DAYSd, wallet $WALLET_USDC USDC."
-            gh issue close -R "$REPO" "$N"
+            # ${TLS_DAYS}d, а не $TLS_DAYSd: во втором случае bash ищет переменную TLS_DAYSd
+            # и подставляет пустоту — сообщения о восстановлении месяц выходили как «TLS ,
+            # domain , wallet 5.01 USDC».
+            gh_retry gh issue comment -R "$REPO" "$N" --body "Recovered — all checks passed at $(date -u +%FT%TZ) UTC. TLS ${TLS_DAYS}d, domain ${DOMAIN_DAYS}d, wallet ${WALLET_USDC} USDC." \
+              || echo "::warning::комментарий о восстановлении не отправлен"
+            gh_retry gh issue close -R "$REPO" "$N" \
+              || echo "::warning::тревога не закрыта — закроет следующий прогон"
           fi
+          exit 0
