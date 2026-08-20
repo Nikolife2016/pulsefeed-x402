@@ -207,13 +207,41 @@ jobs:
                 const payers = Math.max(...rs.map(x => (x.quality && x.quality.l30DaysUniquePayers) || 0));
                 parts.push(`${h}: ${rs.length} листинг(ов) в Bazaar, оплаченных вызовов за 30 дней ${calls}, уникальных плательщиков ${payers}`);
               }
-              rows.set(o.u, `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  у нас есть данные по названному эндпоинту: ${parts.join("; ")}`);
+              rows.set(o.u, { line: `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  у нас есть данные по названному эндпоинту: ${parts.join("; ")}`,
+                              title: o.t.toLowerCase().replace(/\s+/g, " ").trim(), repo: o.r, url: o.u });
+            }
+
+            // ═══ Свёртка кампаний (20.08.2026) ═══
+            // В выпуске за 20.08 четыре строки были ОДНИМ текстом «Complement (not a clone):
+            // Nock free /check + $0.05 /report», разосланным по четырём чужим репозиториям.
+            // Это не четыре вопроса, а одна рассылка: автор продвигает свой продукт, и данные
+            // по названному эндпоинту у нас одни и те же. Дедупликация по URL такое не ловит —
+            // URL у всех разные. Сворачиваем по нормализованному заголовку: тот же текст в
+            // трёх и более репозиториях за один прогон — кампания, в выпуск идёт одна строка
+            // с пометкой. Порог 3, а не 2: два одинаковых заголовка бывают честно (форк,
+            // перенос ветки), три разных репозитория с одним текстом — уже рассылка.
+            {
+              const byTitle = new Map();
+              for (const v of rows.values()) {
+                if (!byTitle.has(v.title)) byTitle.set(v.title, []);
+                byTitle.get(v.title).push(v);
+              }
+              for (const [t, group] of byTitle) {
+                const repos = new Set(group.map(g => g.repo));
+                if (repos.size >= 3) {
+                  const keep = group[0];
+                  for (const g of group.slice(1)) rows.delete(g.url);
+                  // Адреса свёрнутых веток кладём в саму пометку: выпуск — источник seen,
+                  // и без этого завтра те же ветки всплыли бы снова и капали по одной.
+                  keep.line += `\n  ⚠️ тот же текст ещё в ${repos.size - 1} репозиториях — похоже на рассылку, не на ${repos.size} вопросов: ${group.slice(1).map(g => g.url).join(" · ")}`;
+                }
+              }
             }
             // Кап в 12 строк держит комментарий читаемым, но раньше остаток пропадал
             // молча: он не публикуется, значит и в историю отсева не попадает, а завтра
             // его снова вытеснит тот же порядок. Теперь хвост хотя бы назван числом.
             if (!historyBroken) {
-              const all = [...rows.values()];
+              const all = [...rows.values()].map(v => v.line);
               const head = all.slice(0, 12);
               if (all.length > head.length)
                 head.push("\n_Ещё " + (all.length - head.length) + " веток подошли, но не поместились в выпуск — придут завтра._");
