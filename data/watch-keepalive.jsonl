@@ -1926,3 +1926,11 @@
 {"ts":"2026-08-28T14:34:52.817Z","date":"2026-08-28","group":"control","path":"trust/history","present":true,"calls30d":11,"lastCalledAt":"2026-08-01T12:00:36.257Z"}
 {"ts":"2026-08-28T14:34:52.817Z","date":"2026-08-28","group":"control","path":"trust/dataset","present":true,"calls30d":18,"lastCalledAt":"2026-08-26T08:18:20.01Z"}
 {"ts":"2026-08-28T14:34:52.817Z","date":"2026-08-28","group":"control","path":"data/full","present":true,"calls30d":20,"lastCalledAt":"2026-08-25T00:30:09.55Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"test","path":"pulse","present":true,"calls30d":8,"lastCalledAt":"2026-08-01T12:00:09.415Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"test","path":"whales","present":true,"calls30d":8,"lastCalledAt":"2026-08-01T12:00:15.424Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"test","path":"flow","present":true,"calls30d":8,"lastCalledAt":"2026-08-01T12:00:21.454Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"test","path":"momentum","present":true,"calls30d":9,"lastCalledAt":"2026-08-01T12:00:27.783Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"control","path":"trust","present":true,"calls30d":34,"lastCalledAt":"2026-08-28T12:20:33.476Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"control","path":"trust/history","present":true,"calls30d":11,"lastCalledAt":"2026-08-01T12:00:36.257Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"control","path":"trust/dataset","present":true,"calls30d":18,"lastCalledAt":"2026-08-26T08:18:20.01Z"}
+{"ts":"2026-08-28T23:40:19.899Z","date":"2026-08-28","group":"control","path":"data/full","present":true,"calls30d":20,"lastCalledAt":"2026-08-25T00:30:09.55Z"}
