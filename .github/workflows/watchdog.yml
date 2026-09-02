@@ -5,7 +5,8 @@
 #
 # Что сторожит:
 #   1. сервис жив и данные не протухли (/health отдаёт 503 сам, если краул встал);
-#   2. платный контур: 402-челлендж собирается и несёт корректные платёжные требования;
+#   2. платный контур: 402-челлендж собирается и несёт корректные платёжные требования
+#      (с 02.09.2026 проверяем /lab/e1: маршруты данных, включая /trust, бесплатны);
 #   3. TLS: писем от Let's Encrypt больше не рассылают, поэтому срок смотрим сами;
 #   4. домен: RDAP-дата истечения и статусы (в июле 2026 нас уже роняла ICANN-блокировка);
 #   5. кошелёк-покупатель: пустеет односторонне, пополнить автономно нельзя.
@@ -52,13 +53,13 @@ jobs:
           fi
 
           # ── 2. Платный контур: 402 должен собираться и нести требования
-          P=$(curl -s --max-time 25 -w '\n%{http_code}' https://pulsefeed.dev/trust)
+          P=$(curl -s --max-time 25 -w '\n%{http_code}' https://pulsefeed.dev/lab/e1)
           PCODE=$(printf '%s' "$P" | tail -1)
           PBODY=$(printf '%s' "$P" | sed '$d')
           if [ "$PCODE" != "402" ]; then
-            FAIL="$FAIL\n- paid route /trust returned HTTP $PCODE, expected 402 — the payment challenge is not being issued"
+            FAIL="$FAIL\n- paid route /lab/e1 returned HTTP $PCODE, expected 402 — the payment challenge is not being issued"
           elif ! printf '%s' "$PBODY" | grep -q '"payTo"'; then
-            FAIL="$FAIL\n- the 402 challenge on /trust has no payTo — agents cannot pay"
+            FAIL="$FAIL\n- the 402 challenge on /lab/e1 has no payTo — agents cannot pay"
           fi
 
           # ── 3. TLS. Порог 21 день: с 10.02.2027 Let's Encrypt переходит на 64-дневные
