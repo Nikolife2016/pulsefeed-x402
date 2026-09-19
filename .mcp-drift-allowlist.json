@@ -1,0 +1,12 @@
+{
+  "reviewed": [
+    {
+      "eventId": "eb9c6cb717f2e882",
+      "package": "@modelcontextprotocol/sdk",
+      "type": "maintainer_changed",
+      "reviewedBy": "Nikolife2016",
+      "reviewedAt": "2026-09-19",
+      "reason": "ashwin-ant removed from the maintainer set on 2026-09-18 (six to five); the remaining five match the npm registry today and no release has been published since 1.30.0 (2026-07-27). Looks like a team departure; re-check if a release follows."
+    }
+  ]
+}
