@@ -127,6 +127,12 @@ jobs:
           tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -E "node_modules|\.env|\.pem" && { echo "::error::tarball carries files it must not"; exit 1; } || true
           tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -q "package/dist/index.js" || { echo "::error::tarball lacks dist/index.js"; exit 1; }
           git status --porcelain | grep -v -E "(^|/)(pack.json|integrity.txt|.*\.tgz)$" | grep . && { echo "::error::build left the checkout dirty"; exit 1; } || echo "checkout clean after build"
+      - name: Acceptance test against the tarball (installed as a consumer would)
+        if: steps.meta.outputs.mode != 'register-only'
+        working-directory: ${{ steps.meta.outputs.dir }}
+        env:
+          PKG_TGZ: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/${{ steps.meta.outputs.tgz }}
+        run: npm test
       - name: Digest must equal the one accepted by the controller (release-accepted.json)
         if: steps.meta.outputs.mode == 'publish'
         working-directory: ${{ steps.meta.outputs.dir }}
@@ -138,12 +144,6 @@ jobs:
             if (a.version!==v) { console.error("::error::accepted version "+a.version+" != "+v); process.exit(1); }
             if (a.integrity!==got) { console.error("::error::digest of this build "+got+" != accepted "+a.integrity+" — rebuild is not the accepted artefact"); process.exit(1); }
             console.log("digest matches acceptance by", a.acceptedBy, "on", a.acceptedAt);' "${{ steps.meta.outputs.version }}"
-      - name: Acceptance test against the tarball (installed as a consumer would)
-        if: steps.meta.outputs.mode != 'register-only'
-        working-directory: ${{ steps.meta.outputs.dir }}
-        env:
-          PKG_TGZ: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/${{ steps.meta.outputs.tgz }}
-        run: npm test
       - uses: actions/upload-artifact@v4
         if: steps.meta.outputs.mode != 'register-only'
         with:
