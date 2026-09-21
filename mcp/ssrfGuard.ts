@@ -158,8 +158,9 @@ export function createSafeFetch(opts: { resolve?: Resolver; dispatcher?: Dispatc
     try {
       let current = raw;
       for (let hop = 0; hop <= maxRedirects; hop++) {
-        await assertSafeUrl(current, resolve);
-        if (signal.aborted) throw new Error("aborted before request");
+        // Предварительный DNS тоже под таймаутом и внешней отменой (контролёр показал: резолвер без ответа держал
+        // вызов вечно); поздний ответ DNS после отмены ничего не запускает — гонка уже отклонена.
+        await abortable(assertSafeUrl(current, resolve), signal);
         const res = (await undiciFetch(current, { ...(rest as any), redirect: "manual", signal, dispatcher })) as unknown as Response;
         if (res.status >= 300 && res.status < 400) {
           const loc = res.headers.get("location");
@@ -179,6 +180,15 @@ export function createSafeFetch(opts: { resolve?: Resolver; dispatcher?: Dispatc
       throw e;
     }
   };
+}
+
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
+  return new Promise<T>((res, rej) => {
+    const onAbort = () => rej(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(v => { signal.removeEventListener("abort", onAbort); res(v); }, e => { signal.removeEventListener("abort", onAbort); rej(e); });
+  });
 }
 
 /** Экземпляр по умолчанию: системный DNS, свой агент. */

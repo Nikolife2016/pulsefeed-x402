@@ -22,11 +22,14 @@ reached end of life is treated as minor and is stated here.
   verdict "safe to consider paying"; a v2 body with v1 fields, version 999, a missing timeout or `1e21` as the
   amount were accepted too. The answer carries `x402Version` and the number of valid `offers`; a 402 whose body
   is not JSON or never finishes says so in `error`. Conformance fixtures: `pulsefeed.dev/fixtures/x402`.
-- The challenge parser mirrors `PaymentRequiredSchema` of `@x402/core` 2.26 and is checked against it in the
-  acceptance test on 40+ bodies: v2 keeps `resource` at the top level (not inside the offer) and needs a
-  CAIP-2 network; v1 needs `description`; a challenge with one invalid offer is invalid as a whole. Two
-  PulseFeed rules go beyond the schema and are stated as such: the amount must be a decimal-digit string, and
-  on EVM networks `payTo` must be a 0x-prefixed 40-hex address.
+- Validity of a challenge is decided by `PaymentRequiredSchema` of `@x402/core` (now a runtime dependency,
+  version pinned by the lockfile) — not by a copy of it: v2 keeps `resource` at the top level and needs a
+  CAIP-2 network, v1 needs `description`, optional fields must have the right types when present
+  (`extra`, `extensions`, `outputSchema`, `resource.tags`, `error`), amounts are strings, and a challenge with
+  one invalid offer is invalid as a whole. Two PulseFeed rules go beyond the schema and are stated as such: the
+  amount must be a decimal-digit string, and on EVM networks `payTo` must be a 0x-prefixed 40-hex address.
+- The preliminary DNS lookup is bounded by the same timeout and abort signal as the request; a resolver that
+  never answers used to hold the tool forever, and a late answer no longer starts a request.
 - x402 v2 challenges carried in the `PAYMENT-REQUIRED` header (base64 JSON, possibly empty body) are read;
   the answer says where the challenge came from (`challengeSource`) and reports a header that is not base64
   JSON. Before, a header-only v2 response was "402 body is not JSON".

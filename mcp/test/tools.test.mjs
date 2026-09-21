@@ -272,7 +272,7 @@ test("парсер x402-челленджа из тарбола == PaymentRequire
     "empty scheme": { x402Version: 1, accepts: [{ ...v1, scheme: "" }] }, "no asset": { x402Version: 1, accepts: [{ ...v1, asset: undefined }] }, "empty payTo": { x402Version: 1, accepts: [{ ...v1, payTo: "" }] }, "no amount v2": { x402Version: 2, resource: r2, accepts: [{ ...o2, amount: undefined }] },
     "null": null, "string": "x", "array": [],
     // Правила PulseFeed сверх схемы SDK (*): у SDK сумма — любая непустая строка, payTo — любая непустая строка.
-    "(*) amount '1.5'": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: "1.5" }] }, "(*) amount 'abc'": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: "abc" }] }, "(*) amount 1e21 (number)": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: 1e21 }] }, "(*) amount -1 v2": { x402Version: 2, resource: r2, accepts: [{ ...o2, amount: -1 }] },
+    "(*) amount '1.5'": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: "1.5" }] }, "(*) amount 'abc'": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: "abc" }] }, "amount 1e21 (number)": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: 1e21 }] }, "amount -1 v2 (number)": { x402Version: 2, resource: r2, accepts: [{ ...o2, amount: -1 }] },
     "(*) EVM payTo not an address": { x402Version: 1, accepts: [{ ...v1, payTo: "not-an-address" }] }, "(*) eip155 payTo not an address": { x402Version: 2, resource: r2, accepts: [{ ...o2, payTo: "abc" }] },
   };
   for (const [name, body] of Object.entries(bodies)) {
@@ -280,8 +280,19 @@ test("парсер x402-челленджа из тарбола == PaymentRequire
     if (name.startsWith("(*)")) { assert.equal(ours, false, name + ": правило PulseFeed не сработало"); continue; }
     assert.equal(ours, sdk, `${name}: SDK=${sdk}, парсер=${ours}`);
   }
-  // Число как сумма (SDK требует строку): у нас безопасное целое допустимо — документированное послабление, а не расхождение в опасную сторону.
-  assert.equal(parseChallenge({ x402Version: 1, accepts: [{ ...v1, maxAmountRequired: 10000 }] })[0].amount, "10000");
+  // Мутации необязательных полей и типов (N15): SDK отклоняет — парсер обязан отклонить (он и есть SDK-схема + правила (*)).
+  const base2 = { x402Version: 2, resource: { url: "http://93.184.216.34/api" }, accepts: [{ ...o2, extra: undefined }] };
+  const mutations = {
+    "v2 amount as number": b => { b.accepts[0].amount = 10000; }, "v2 extra 'garbage'": b => { b.accepts[0].extra = "garbage"; }, "v2 extensions []": b => { b.extensions = []; },
+    "v2 resource.description 42": b => { b.resource.description = 42; }, "v2 resource.tags 42": b => { b.resource.tags = 42; }, "v2 error object": b => { b.error = { message: "pay" }; },
+    "v2 maxTimeoutSeconds '60'": b => { b.accepts[0].maxTimeoutSeconds = "60"; }, "v2 resource.url ''": b => { b.resource.url = ""; },
+  };
+  assert.equal(PaymentRequiredSchema.safeParse(base2).success, true); assert.equal(parseChallenge(base2).length, 1);
+  for (const [name, mutate] of Object.entries(mutations)) { const b = JSON.parse(JSON.stringify(base2)); mutate(b); assert.equal(PaymentRequiredSchema.safeParse(b).success, false, name + ": SDK принял?"); assert.deepEqual(parseChallenge(b), [], name + ": парсер принял"); }
+  const base1 = { x402Version: 1, accepts: [v1] };
+  for (const [name, mutate] of Object.entries({ "v1 amount as number": b => { b.accepts[0].maxAmountRequired = 10000; }, "v1 extra []": b => { b.accepts[0].extra = []; }, "v1 outputSchema 42": b => { b.accepts[0].outputSchema = 42; }, "v1 mimeType 42": b => { b.accepts[0].mimeType = 42; }, "v1 error 42": b => { b.error = 42; } })) {
+    const b = JSON.parse(JSON.stringify(base1)); mutate(b); assert.equal(PaymentRequiredSchema.safeParse(b).success, false, name + ": SDK принял?"); assert.deepEqual(parseChallenge(b), [], name + ": парсер принял");
+  }
   const v2p = parseChallenge({ x402Version: 2, resource: r2, accepts: [o2] })[0];
   assert.deepEqual(v2p, { scheme: "exact", network: "eip155:8453", payTo: PAYTO, asset: ASSET, amount: "10000", maxTimeoutSeconds: 60, resource: "https://x.example/api", version: 2 });
   assert.equal(parseChallenge({ x402Version: 2, resource: r2, accepts: [{}, "garbage", o2] }).length, 0, "мусор рядом с валидным делает челлендж невалидным (как у SDK)");
@@ -379,6 +390,26 @@ test("DNS rebinding из тарбола: имя резолвится в публ
     let err2 = null; try { await sf2("http://public.test/", { timeoutMs: 1500 }); } catch (e) { err2 = e; }
     assert.ok(!(err2 instanceof SsrfBlocked), "публичный адрес заблокирован: " + (err2 && err2.message)); assert.ok(calls2 >= 2);
   } finally { trap.close(); }
+});
+
+test("DNS без ответа из тарбола: предварительный lookup ограничен таймаутом и внешней отменой; поздний ответ DNS не запускает запрос", async () => {
+  const { createSafeFetch } = await import(join(consumer, "node_modules", "pulsefeed-x402-mcp", "dist", "ssrfGuard.js"));
+  const { MockAgent } = await import(join(consumer, "node_modules", "undici", "index.js"));
+  const mock = new MockAgent(); mock.disableNetConnect(); let dispatched = 0;
+  mock.get("http://hanging-dns.test").intercept({ path: /.*/, method: "GET" }).reply(() => { dispatched++; return { statusCode: 200, data: "{}" }; }).persist();
+  try {
+    const sfNever = createSafeFetch({ resolve: () => {}, dispatcher: mock });
+    const t0 = Date.now(); await assert.rejects(sfNever("http://hanging-dns.test/", { timeoutMs: 50 }), e => /timeout after 50 ms/.test(e.message), "таймаут не оборвал DNS");
+    assert.ok(Date.now() - t0 < 2000, "DNS-ожидание не ограничено таймаутом");
+    const outer = new AbortController(); setTimeout(() => outer.abort(new Error("outer abort")), 20);
+    const t1 = Date.now(); await assert.rejects(sfNever("http://hanging-dns.test/", { timeoutMs: 60_000, signal: outer.signal }), e => /outer abort/.test(e.message), "внешняя отмена не оборвала DNS");
+    assert.ok(Date.now() - t1 < 2000);
+    // Поздний ответ DNS (публичный адрес) после срабатывания таймаута: запрос не должен уйти.
+    let lateCb = null; const sfLate = createSafeFetch({ resolve: (h, o, cb) => { lateCb = cb; }, dispatcher: mock });
+    await assert.rejects(sfLate("http://hanging-dns.test/", { timeoutMs: 50 }), /timeout after 50 ms/);
+    lateCb(null, [{ address: "93.184.216.34", family: 4 }]); await new Promise(r => setTimeout(r, 200));
+    assert.equal(dispatched, 0, "после позднего ответа DNS ушёл запрос");
+  } finally { await mock.close(); }
 });
 
 test("safeFetch из тарбола: таймаут действует на чтение тела (сервер отдал заголовки и не завершает тело) и на внешний сигнал — через настоящий агент и локальный TCP-сервер", async () => {
