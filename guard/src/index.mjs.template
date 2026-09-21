@@ -1,0 +1,6 @@
+// ESM-вход: только реэкспорт из CommonJS-реализации. Никакой логики здесь быть не должно —
+// иначе появятся два класса PaymentBlockedError и сломается instanceof через границу форматов.
+import cjs from "./index.cjs";
+export const guardFetch = cjs.guardFetch;
+export const verify = cjs.verify;
+export const PaymentBlockedError = cjs.PaymentBlockedError;

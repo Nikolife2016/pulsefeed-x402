@@ -1,0 +1,32 @@
+{
+  "name": "pulsefeed-x402-guard",
+  "version": "1.0.1",
+  "description": "Safety guard for x402 agent payments — verify an endpoint with PulseFeed before paying, and block dead / scam / risky x402 services automatically. ESM and CommonJS.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  },
+  "files": ["dist"],
+  "keywords": ["x402", "agents", "payments", "trust", "safety", "guard", "base", "usdc", "crypto", "ai-agents"],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "node build.mjs",
+    "prepack": "npm run build",
+    "test": "node --test test/consumer.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0",
+    "@x402/fetch": "^2.26.0"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "homepage": "https://pulsefeed.dev",
+  "repository": { "type": "git", "url": "git+https://github.com/Nikolife2016/pulsefeed-x402.git", "directory": "guard" },
+  "bugs": { "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues" }
+}

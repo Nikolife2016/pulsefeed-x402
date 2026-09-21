@@ -16,19 +16,22 @@
 # npmjs.com для КАЖДОГО пакета (репозиторий + имя этого файла). Первую версию нового пакета через
 # OIDC опубликовать нельзя (npm/cli#8544) — бутстрап вручную, один раз.
 #
-# Триггеры: тег `mcp-v<version>` (совпадение с mcp/package.json проверяется) или ручной запуск
-# с явным выбором пакета. Один запуск — один пакет.
-name: Publish MCP (npm + official registry)
+# Триггеры: тег `<pkg>-v<version>` (mcp-v1.0.8, guard-v1.0.1; совпадение с package.json проверяется)
+# или ручной запуск с явным выбором пакета. Один запуск — один пакет.
+# Пакеты: mcp → pulsefeed-x402-mcp (+ регистрация в MCP Registry); guard → pulsefeed-x402-guard.
+# ⚠️ guard через OIDC публикуется только после того, как для него на npmjs.com настроен доверенный
+# издатель (этот репозиторий + publish-mcp.yml). До этого шаг publish у guard упадёт — и это видно.
+name: Publish packages (npm + official MCP registry)
 on:
   push:
-    tags: ["mcp-v*"]
+    tags: ["mcp-v*", "guard-v*"]
   workflow_dispatch:
     inputs:
       package:
         description: "Какой пакет публиковать"
         required: true
         type: choice
-        options: [mcp]
+        options: [mcp, guard]
       confirm:
         description: "Введите точную версию из package.json, чтобы подтвердить публикацию"
         required: true
@@ -46,6 +49,8 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tgz: ${{ steps.meta.outputs.tgz }}
+      dir: ${{ steps.meta.outputs.dir }}
+      name: ${{ steps.meta.outputs.name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,30 +63,35 @@ jobs:
             echo "::error::node_modules or dist is tracked in git — this is how 06.08.2026 happened. Untrack them."; exit 1
           fi
           echo "git tree clean of artefacts"
-      - name: Version must match the tag / the confirmation
+      - name: Resolve package, version must match the tag / the confirmation
         id: meta
         run: |
           set -e
-          V=$(node -p "require('./mcp/package.json').version")
+          if [ "${{ github.event_name }}" = "push" ]; then PKG="${GITHUB_REF_NAME%%-v*}"; else PKG="${{ github.event.inputs.package }}"; fi
+          case "$PKG" in mcp) NAME=pulsefeed-x402-mcp;; guard) NAME=pulsefeed-x402-guard;; *) echo "::error::unknown package '$PKG'"; exit 1;; esac
+          V=$(node -p "require('./$PKG/package.json').version")
+          [ "$(node -p "require('./$PKG/package.json').name")" = "$NAME" ] || { echo "::error::$PKG/package.json is not $NAME"; exit 1; }
           if [ "${{ github.event_name }}" = "push" ]; then
-            T="${GITHUB_REF_NAME#mcp-v}"
-            [ "$T" = "$V" ] || { echo "::error::tag mcp-v$T does not match mcp/package.json $V"; exit 1; }
+            T="${GITHUB_REF_NAME#*-v}"
+            [ "$T" = "$V" ] || { echo "::error::tag $GITHUB_REF_NAME does not match $PKG/package.json $V"; exit 1; }
           else
-            [ "${{ github.event.inputs.confirm }}" = "$V" ] || { echo "::error::confirmation '${{ github.event.inputs.confirm }}' does not match mcp/package.json $V"; exit 1; }
+            [ "${{ github.event.inputs.confirm }}" = "$V" ] || { echo "::error::confirmation '${{ github.event.inputs.confirm }}' does not match $PKG/package.json $V"; exit 1; }
           fi
-          if npm view "pulsefeed-x402-mcp@$V" version >/dev/null 2>&1; then echo "::error::pulsefeed-x402-mcp@$V already exists on npm — bump the version"; exit 1; fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "tgz=pulsefeed-x402-mcp-$V.tgz" >> "$GITHUB_OUTPUT"
+          # Существование версии проверяем по коду ответа, а не по «команда упала»: сетевая ошибка ≠ «версии нет».
+          if npm view "$NAME@$V" version 2>/dev/null | grep -q .; then echo "::error::$NAME@$V already exists on npm — bump the version"; exit 1; fi
+          npm view "$NAME" name >/dev/null || { echo "::error::cannot reach npm to check $NAME"; exit 1; }
+          echo "version=$V" >> "$GITHUB_OUTPUT"; echo "dir=$PKG" >> "$GITHUB_OUTPUT"; echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "tgz=$NAME-$V.tgz" >> "$GITHUB_OUTPUT"
       - name: Install (lockfile, dev included) and build once
-        working-directory: mcp
+        working-directory: ${{ steps.meta.outputs.dir }}
         run: |
           set -e
           npm ci --include=dev
           npm run clean
           npm run build
-          test -f dist/index.js && test -f dist/ssrfGuard.js
+          test -f dist/index.js
       - name: Pack the artefact that will be published
-        working-directory: mcp
+        working-directory: ${{ steps.meta.outputs.dir }}
         run: |
           set -e
           npm pack --json --ignore-scripts > pack.json     # dist уже собран; prepack не запускаем повторно
@@ -89,23 +99,22 @@ jobs:
           tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -E "node_modules|\.env|\.pem" && { echo "::error::tarball carries files it must not"; exit 1; } || true
           tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -q "package/dist/index.js" || { echo "::error::tarball lacks dist/index.js"; exit 1; }
       - name: Acceptance test against the tarball (installed as a consumer would)
-        working-directory: mcp
+        working-directory: ${{ steps.meta.outputs.dir }}
         env:
-          PKG_TGZ: ${{ github.workspace }}/mcp/${{ steps.meta.outputs.tgz }}
+          PKG_TGZ: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/${{ steps.meta.outputs.tgz }}
         run: npm test
       - uses: actions/upload-artifact@v4
         with:
-          name: mcp-tarball
+          name: tarball
           path: |
-            mcp/${{ steps.meta.outputs.tgz }}
-            mcp/integrity.txt
+            ${{ steps.meta.outputs.dir }}/${{ steps.meta.outputs.tgz }}
+            ${{ steps.meta.outputs.dir }}/integrity.txt
           if-no-files-found: error
           retention-days: 30
 
   publish:
     name: publish the verified tarball
     needs: verify
-    if: github.event_name == 'push' || github.event.inputs.package == 'mcp'
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # OIDC: npm trusted publishing + mcp-publisher github-oidc
@@ -118,39 +127,44 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - uses: actions/download-artifact@v4
         with:
-          name: mcp-tarball
+          name: tarball
           path: artefact
       - name: Ensure npm supports trusted publishing (pinned)
         run: npm install -g npm@11.7.0 && npm --version
       - name: Publish the same tarball under dist-tag `next`
         env:
           V: ${{ needs.verify.outputs.version }}
+          NAME: ${{ needs.verify.outputs.name }}
           TGZ: artefact/${{ needs.verify.outputs.tgz }}
         run: |
           set -e
           npm publish "$TGZ" --tag next --provenance --access public
           sleep 20
-          REMOTE=$(npm view "pulsefeed-x402-mcp@$V" dist.integrity)
+          REMOTE=$(npm view "$NAME@$V" dist.integrity)
           LOCAL=$(cat artefact/integrity.txt)
           [ "$REMOTE" = "$LOCAL" ] || { echo "::error::integrity mismatch: npm=$REMOTE local=$LOCAL"; exit 1; }
           echo "npm serves the exact tarball we tested: $REMOTE"
       - name: Re-run acceptance against the package as npm serves it
-        working-directory: mcp
+        working-directory: ${{ needs.verify.outputs.dir }}
         env:
           V: ${{ needs.verify.outputs.version }}
+          NAME: ${{ needs.verify.outputs.name }}
         run: |
           set -e
           npm ci --include=dev --ignore-scripts
-          npm pack "pulsefeed-x402-mcp@$V" --silent
-          PKG_TGZ="$PWD/pulsefeed-x402-mcp-$V.tgz" npm test
+          npm pack "$NAME@$V" --silent
+          PKG_TGZ="$PWD/$NAME-$V.tgz" npm test
       - name: Promote to latest
         env:
           V: ${{ needs.verify.outputs.version }}
-        run: npm dist-tag add "pulsefeed-x402-mcp@$V" latest && npm view pulsefeed-x402-mcp dist-tags --json
+          NAME: ${{ needs.verify.outputs.name }}
+        run: npm dist-tag add "$NAME@$V" latest && npm view "$NAME" dist-tags --json
       - name: Install mcp-publisher
+        if: needs.verify.outputs.dir == 'mcp'
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
       - name: Sync server.json with the published version
+        if: needs.verify.outputs.dir == 'mcp'
         env:
           V: ${{ needs.verify.outputs.version }}
         run: |
@@ -162,6 +176,7 @@ jobs:
             fs.writeFileSync("server.json", JSON.stringify(s, null, 2) + "\n");
             console.log("server.json →", v);'
       - name: Register in the official MCP Registry (OIDC)
+        if: needs.verify.outputs.dir == 'mcp'
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
