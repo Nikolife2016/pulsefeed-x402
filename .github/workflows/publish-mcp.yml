@@ -26,25 +26,26 @@
 # npmjs.com для КАЖДОГО пакета (репозиторий + имя этого файла). Первую версию нового пакета через
 # OIDC опубликовать нельзя (npm/cli#8544) — бутстрап вручную, один раз.
 #
-# Триггеры: тег `<pkg>-v<version>` (mcp-v1.1.0, guard-v1.1.0; совпадение с package.json проверяется)
-# или ручной запуск с явным выбором пакета. Один запуск — один пакет.
-# Пакеты: mcp → pulsefeed-x402-mcp (+ регистрация в MCP Registry); guard → pulsefeed-x402-guard.
+# Триггеры: тег `<pkg>-v<version>` (mcp-v1.1.0, guard-v1.1.0, ai-tools-v1.1.0; совпадение с package.json
+# проверяется) или ручной запуск с явным выбором пакета. Один запуск — один пакет.
+# Пакеты: mcp → pulsefeed-x402-mcp (+ регистрация в MCP Registry); guard → pulsefeed-x402-guard;
+# ai-tools → pulsefeed-x402-ai-tools.
 # register-only (восстановление регистрации после успешной публикации в npm) запускается ТОЛЬКО на
 # ref тега релиза: проверяет ту же запись допуска, сверяет digest, который отдаёт npm, с принятым,
 # регистрирует и проверяет, что Registry отдаёт эту версию.
-# ⚠️ guard через OIDC публикуется только после того, как для него на npmjs.com настроен доверенный
-# издатель (этот репозиторий + publish-mcp.yml). До этого шаг publish у guard упадёт — и это видно.
+# ⚠️ guard и ai-tools через OIDC публикуются только после того, как для них на npmjs.com настроен
+# доверенный издатель (этот репозиторий + publish-mcp.yml). До этого шаг publish у них упадёт — и это видно.
 name: Publish packages (npm + official MCP registry)
 on:
   push:
-    tags: ["mcp-v*", "guard-v*"]
+    tags: ["mcp-v*", "guard-v*", "ai-tools-v*"]
   workflow_dispatch:
     inputs:
       package:
         description: "Какой пакет"
         required: true
         type: choice
-        options: [mcp, guard]
+        options: [mcp, guard, ai-tools]
       mode:
         description: "verify-only — собрать, проверить, напечатать digest (ничего не публикует); rehearse — то же плюс проверка записи допуска (SHA, workflow, digest), без публикации; publish — опубликовать; register-only — только зарегистрировать уже опубликованную версию в MCP Registry (запускать на ref тега)"
         required: true
@@ -57,7 +58,7 @@ on:
         type: string
 concurrency:
   # Группа — по пакету, одинаково для тега и ручного запуска: два релиза одного пакета не идут параллельно.
-  group: publish-${{ github.event.inputs.package || (startsWith(github.ref_name, 'guard-v') && 'guard' || 'mcp') }}
+  group: publish-${{ github.event.inputs.package || (startsWith(github.ref_name, 'guard-v') && 'guard' || startsWith(github.ref_name, 'ai-tools-v') && 'ai-tools' || 'mcp') }}
   cancel-in-progress: false
 permissions:
   contents: read
@@ -103,7 +104,7 @@ jobs:
         run: |
           set -e
           if [ "${{ github.event_name }}" = "push" ]; then PKG="${GITHUB_REF_NAME%%-v*}"; MODE=publish; else PKG="$IN_PACKAGE"; MODE="$IN_MODE"; fi
-          case "$PKG" in mcp) NAME=pulsefeed-x402-mcp;; guard) NAME=pulsefeed-x402-guard;; *) echo "::error::unknown package '$PKG'"; exit 1;; esac
+          case "$PKG" in mcp) NAME=pulsefeed-x402-mcp;; guard) NAME=pulsefeed-x402-guard;; ai-tools) NAME=pulsefeed-x402-ai-tools;; *) echo "::error::unknown package '$PKG'"; exit 1;; esac
           V=$(node -p "require('./$PKG/package.json').version")
           echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$' || { echo "::error::package.json version '$V' is not semver"; exit 1; }
           [ "$(node -p "require('./$PKG/package.json').name")" = "$NAME" ] || { echo "::error::$PKG/package.json is not $NAME"; exit 1; }
@@ -155,7 +156,7 @@ jobs:
           npm ci --include=dev
           npm run clean
           npm run build
-          test -f dist/index.js
+          ls dist/*.js >/dev/null
       - name: Pack the artefact that will be published
         if: steps.meta.outputs.mode != 'register-only'
         working-directory: ${{ steps.meta.outputs.dir }}
