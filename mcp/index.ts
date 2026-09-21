@@ -10,6 +10,21 @@ const BASE = process.env.PULSEFEED_URL || "https://pulsefeed.dev";
 
 const server = new McpServer({ name: "pulsefeed-x402", version: "1.0.8" });
 
+const textOf = (j: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(j, null, 2) }] });
+// Ошибка бэкенда обязана стать ОШИБКОЙ инструмента, а не тихими пустыми данными: 21.09.2026 контролёр
+// воспроизвёл, как HTTP 503 превращался в «пакет чист». Проверяем статус и что тело — JSON-объект.
+class BackendError extends Error { constructor(msg: string) { super(msg); this.name = "BackendError"; } }
+const getJson = async (path: string): Promise<Record<string, any>> => {
+  const r = await fetch(`${BASE}${path}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
+  if (!r.ok) throw new BackendError(`PulseFeed answered HTTP ${r.status} for ${path}`);
+  let j: unknown;
+  try { j = await r.json(); } catch { throw new BackendError(`PulseFeed returned non-JSON for ${path}`); }
+  if (!j || typeof j !== "object" || Array.isArray(j)) throw new BackendError(`PulseFeed returned an unexpected body for ${path}`);
+  return j as Record<string, any>;
+};
+const errorOf = (e: unknown) => ({ isError: true as const, content: [{ type: "text" as const, text: `${e instanceof Error ? e.message : String(e)}. No verdict was produced; do not treat this as "clean".` }] });
+
+
 server.registerTool(
   "x402_working_services",
   {
@@ -19,11 +34,7 @@ server.registerTool(
       "List x402 agent-payment services that are currently ALIVE and return a valid x402 challenge, ranked by trust score. About 85% of x402 endpoints are dead or invalid — use this to avoid paying broken or scam endpoints. Free.",
     inputSchema: {},
   },
-  async () => {
-    const r = await fetch(`${BASE}/status.json`);
-    const j = await r.json();
-    return { content: [{ type: "text", text: JSON.stringify(j, null, 2) }] };
-  },
+  async () => { try { return textOf(await getJson("/status.json")); } catch (e) { return errorOf(e); } },
 );
 
 server.registerTool(
@@ -69,7 +80,7 @@ server.registerTool(
     }
     // Дообогащение из непрерывного аудита PulseFeed: флаги скама/аномалий + trust score из кэша.
     try {
-      const v: any = await (await fetch(`${BASE}/verify?endpoint=${encodeURIComponent(url)}`)).json();
+      const v: any = await getJson(`/verify?endpoint=${encodeURIComponent(url)}`);
       if (v && v.known) { out.trustScore = v.score; out.registryVerdict = v.verdict; out.knownFlags = v.flags; out.receiverStability = v.receiverStability; out.uptimePct = v.uptimePct; }
     } catch { /* кэш недоступен — живая проба выше уже дала вердикт */ }
     out.verdict = out.blocked ? "blocked — refused to fetch a private/loopback address" : out.valid ? "live — valid x402, safe to consider paying" : "avoid — no valid x402 challenge";
@@ -88,7 +99,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const r = await fetch(`${BASE}/`);
+    const r = await fetch(`${BASE}/`, { signal: AbortSignal.timeout(30_000) });
     const j = await r.json();
     return { content: [{ type: "text", text: JSON.stringify(j, null, 2) }] };
   },
@@ -97,8 +108,6 @@ server.registerTool(
 
 // ---- Бесплатные data-тулы (обёртки публичных эндпоинтов PulseFeed) ----
 
-const textOf = (j: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(j, null, 2) }] });
-const getJson = async (path: string) => (await fetch(`${BASE}${path}`)).json();
 
 server.registerTool(
   "x402_ecosystem_stats",
@@ -120,16 +129,18 @@ server.registerTool(
   "x402_incidents",
   { title: "Live x402 security incidents",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-    description: "Live security incidents in the x402 economy caught by PulseFeed's detector: receiver hijacks (payTo swapped), bait-and-switch pricing, honeypots, unverified receivers, price gouging — each with an on-chain proof URL. Check before paying anything. Free.", inputSchema: {} },
-  async () => { const j: any = await getJson("/incidents.json?days=30&limit=50"); return textOf(j); },
+    description: "Live security incidents in the x402 economy caught by PulseFeed's detector: receiver hijacks (payTo swapped), bait-and-switch pricing, honeypots, unverified receivers, price gouging — each with an on-chain proof URL. Check before paying anything. Free.",
+    inputSchema: { days: z.number().int().min(1).max(365).optional().describe("Window in days (default 30)") } },
+  async ({ days }) => { try { return textOf(await getJson(`/incidents.json?days=${days ?? 30}&limit=50`)); } catch (e) { return errorOf(e); } },
 );
 
 server.registerTool(
   "x402_changes",
   { title: "Recent x402 ecosystem changes",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-    description: "What changed in the x402 ecosystem in the last 7 days: services that went dark, receiver (payTo) swaps — possible hijacks, price changes, recovered and newly-seen services. Derived from PulseFeed's compounding time-series (cannot be reconstructed after the fact). Free.", inputSchema: {} },
-  async () => { const j: any = await getJson("/changes.json?days=7&limit=100"); return textOf(j); },
+    description: "What changed in the x402 ecosystem in the last 7 days: services that went dark, receiver (payTo) swaps — possible hijacks, price changes, recovered and newly-seen services. Derived from PulseFeed's compounding time-series (cannot be reconstructed after the fact). Free.",
+    inputSchema: { days: z.number().int().min(1).max(365).optional().describe("Window in days (default 7)") } },
+  async ({ days }) => { try { return textOf(await getJson(`/changes.json?days=${days ?? 7}&limit=100`)); } catch (e) { return errorOf(e); } },
 );
 
 server.registerTool(
@@ -145,17 +156,19 @@ server.registerTool(
     },
   },
   async ({ packages, days }) => {
-    const q = new URLSearchParams({ days: String(days ?? 30) });
-    if (packages?.length) q.set("packages", packages.join(","));
-    const j: any = await getJson(`/mcp/drift.json?${q.toString()}`);
-    if (packages?.length) {
-      // Живой сервер отдаёт события по списку и поле requested; `clean` считаем здесь, чтобы
-      // ответ читался без второго вызова: пакет чист = ни одного события в окне.
-      const seen = new Set((j.events ?? []).map((e: any) => e.id));
-      j.clean = packages.filter(p => !seen.has(p));
-      j.note = "`clean` means no recorded drift in this window. Use mcp_check_server for the package's current standing.";
-    }
-    return textOf(j);
+    try {
+      const q = new URLSearchParams({ days: String(days ?? 30) });
+      if (packages?.length) q.set("packages", packages.join(","));
+      const j = await getJson(`/mcp/drift.json?${q.toString()}`);
+      // `clean` вычисляется ТОЛЬКО из валидного массива событий. Нет массива — нет вердикта.
+      if (!Array.isArray(j.events)) throw new BackendError("drift feed has no events array");
+      if (packages?.length) {
+        const seen = new Set(j.events.map((e: any) => e?.id));
+        j.clean = packages.filter(p => !seen.has(p));
+        j.note = "`clean` means no recorded drift in this window. Use mcp_check_server for the package's current standing.";
+      }
+      return textOf(j);
+    } catch (e) { return errorOf(e); }
   },
 );
 
@@ -164,7 +177,7 @@ server.registerTool(
   { title: "State of MCP security",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: "State of MCP Security: how many audited MCP servers run an arbitrary install script on npm i, are abandoned, ship no repository or license — with day-over-day deltas and a sample of currently-flagged servers. From PulseFeed's daily MCP audit (950+ servers). Free.", inputSchema: {} },
-  async () => { const j: any = await getJson("/mcp-report.json"); return textOf({ current: j.current, deltas: j.deltas, riskySample: j.live ? j.live.riskySample : [] }); },
+  async () => { try { const j: any = await getJson("/mcp-report.json"); return textOf({ current: j.current, deltas: j.deltas, riskySample: j.live ? j.live.riskySample : [] }); } catch (e) { return errorOf(e); } },
 );
 
 server.registerTool(
@@ -172,7 +185,7 @@ server.registerTool(
   { title: "Audit an MCP server before installing",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: "Before installing an MCP server, audit it by npm package name: does it run an install script (arbitrary code at npm i), is it abandoned, does it ship a repository/license, weekly downloads, provenance — verdict safe/caution/avoid. Free.", inputSchema: { package: z.string().describe("npm package name of the MCP server, e.g. @scope/name") } },
-  async ({ package: pkg }) => { const j: any = await getJson(`/mcp/verify?package=${encodeURIComponent(pkg)}`); return textOf(j); },
+  async ({ package: pkg }) => { try { return textOf(await getJson(`/mcp/verify?package=${encodeURIComponent(pkg)}`)); } catch (e) { return errorOf(e); } },
 );
 
 server.registerTool(
@@ -180,7 +193,7 @@ server.registerTool(
   { title: "Free sample of the trust dataset",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description: "FREE sample of the PulseFeed Data API: top-10 live x402 services as FULL records (compounding payTo/price history, scam flags, on-chain receiver profile), top-10 MCP servers with full audit profile, and 3 live incidents. The full cross-domain dataset is GET /data/full ($1 via x402). Free.", inputSchema: {} },
-  async () => { const j: any = await getJson("/data/sample"); return textOf(j); },
+  async () => { try { return textOf(await getJson("/data/sample")); } catch (e) { return errorOf(e); } },
 );
 
 await server.connect(new StdioServerTransport());

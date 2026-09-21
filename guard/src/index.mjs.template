@@ -4,3 +4,4 @@ import cjs from "./index.cjs";
 export const guardFetch = cjs.guardFetch;
 export const verify = cjs.verify;
 export const PaymentBlockedError = cjs.PaymentBlockedError;
+export const PulseFeedUnavailableError = cjs.PulseFeedUnavailableError;

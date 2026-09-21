@@ -11,10 +11,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["20", "24.15.0"]   # заявленный минимум engines и версия релизного конвейера
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "24" }
+        with: { node-version: "${{ matrix.node }}" }
       - run: |
           if git ls-files | grep -E '(^|/)(node_modules|dist)(/|$)'; then echo "::error::artefacts tracked in git"; exit 1; fi
       - working-directory: mcp

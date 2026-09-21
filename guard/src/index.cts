@@ -66,6 +66,13 @@ export class PaymentBlockedError extends Error {
 }
 
 const DEFAULT_API = "https://pulsefeed.dev";
+const VERDICTS: ReadonlySet<string> = new Set(["safe", "caution", "avoid", "unknown"]);
+
+/** PulseFeed недоступен или ответил не тем: HTTP-ошибка, таймаут, не-JSON, чужая форма ответа. */
+export class PulseFeedUnavailableError extends Error {
+  status?: number;
+  constructor(msg: string, status?: number) { super(msg); this.name = "PulseFeedUnavailableError"; this.status = status; }
+}
 
 function urlOf(input: any): string {
   if (typeof input === "string") return input;
@@ -90,8 +97,16 @@ export async function verify(
     const r = await f(`${api}/verify?endpoint=${encodeURIComponent(endpoint)}`, {
       signal: ctrl.signal, headers: { accept: "application/json" },
     });
-    if (!r.ok) return { endpoint, known: false, verdict: "unknown", advice: `PulseFeed HTTP ${r.status}` };
-    return (await r.json()) as TrustVerdict;
+    // ⛔ Ошибка проверки ≠ вердикт «неизвестен». 21.09.2026 контролёр воспроизвёл: HTTP 503
+    // возвращался как unknown, onError не срабатывал, и с onError:"block" оплата всё равно шла.
+    // Теперь любая неисправность — исключение, которое guardFetch направляет в политику onError.
+    if (!r.ok) throw new PulseFeedUnavailableError(`PulseFeed HTTP ${r.status}`, r.status);
+    let j: any;
+    try { j = await r.json(); } catch { throw new PulseFeedUnavailableError("PulseFeed returned non-JSON", r.status); }
+    if (!j || typeof j !== "object" || typeof j.known !== "boolean" || !VERDICTS.has(j.verdict)) {
+      throw new PulseFeedUnavailableError("PulseFeed returned an unexpected body", r.status);
+    }
+    return j as TrustVerdict;
   } finally {
     clearTimeout(timer);
   }
@@ -111,8 +126,8 @@ export function guardFetch(innerFetch: FetchLike, opts: GuardOptions = {}): Fetc
     let trust: TrustVerdict;
     try {
       trust = await verify(url, { apiUrl: opts.apiUrl, timeoutMs: opts.timeoutMs, fetchImpl: opts.fetchImpl });
-    } catch {
-      trust = { endpoint: url, known: false, verdict: "unknown", advice: "PulseFeed недоступен" };
+    } catch (e) {
+      trust = { endpoint: url, known: false, verdict: "unknown", advice: `PulseFeed unavailable: ${e instanceof Error ? e.message : String(e)}` };
       if (onError === "block") {
         const d: GuardDecision = { url, decision: "block", reason: "verify-error", trust };
         opts.onDecision?.(d);

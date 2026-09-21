@@ -55,7 +55,7 @@
   },
   "mcpName": "io.github.Nikolife2016/pulsefeed-x402",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "license": "MIT"
 }
