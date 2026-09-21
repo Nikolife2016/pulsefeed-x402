@@ -1,0 +1,12 @@
+{
+  "package": "pulsefeed-x402-ai-tools",
+  "version": "1.1.0",
+  "integrity": "sha512-3ud83MMGz8ccBsPNGfNbYf05KCmOfprv5sTruwygDrrct3vJyOFfPe3woR/5A7UwvMmQx27lueafo5TNFx5fKw==",
+  "sha": "0d6bc1ab853793563e18c6b37ca5b1d0c1f96704",
+  "workflow": ".github/workflows/publish-mcp.yml",
+  "workflowSha256": "65c29ad464109a18864fa50bd4881ed1052c1f3a49cbad451f2d2ad25fa0729d",
+  "acceptedBy": "GPT-6 Astra (controller), round 5 (code, astra_pkg_gate5.md) + round 10 (workflow, astra_pkg_gate10.md): «ДОПУЩЕНО: pulsefeed-x402-ai-tools@1.1.0» for this SHA and this digest only",
+  "acceptedAt": "2026-09-21T13:48:03.110Z",
+  "evidence": "CI verify-only run 35607586513 on 0d6bc1a (tarball byte-identical to the round-5 build); acceptance 15/15 on Node 20 and 24.15.0; consumers (ai 4, core 0.3, zod 3), (ai 7, core 1, zod 3), (ai 7, core 1, zod 4)",
+  "note": "Publication straight to latest (npm OIDC authorises publish only) is an owner decision; the owner ordered the publications on 2026-09-21 and configured the npm trusted publisher for this package the same day."
+}
