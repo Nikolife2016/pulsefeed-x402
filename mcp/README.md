@@ -34,7 +34,9 @@ Backed by [PulseFeed](https://pulsefeed.dev), an independent daily re-audit of t
 }
 ```
 
-Config: `PULSEFEED_URL` overrides the backend base URL.
+Config: `PULSEFEED_URL` overrides the backend base URL. Node 20+.
+
+When PulseFeed cannot be consulted (non-2xx, non-JSON, unexpected body, malformed drift events) a tool returns an MCP error (`isError: true`) saying that **no verdict was produced** — an agent must not read that as "clean" or "safe".
 
 ## Development
 
@@ -46,7 +48,7 @@ npm test               # packs a tarball, installs it in a clean directory as a 
                        # test/live-tools.snapshot.json
 ```
 
-`dist/` and `node_modules/` are not tracked in git. The published tarball is built once in CI, tested as installed, published under the `next` dist-tag, verified against what npm serves, and only then promoted to `latest` — see `.github/workflows/publish-mcp.yml`. Release: push a tag `mcp-v<version>` matching `package.json`, or run the workflow manually and type the version to confirm.
+`dist/` and `node_modules/` are not tracked in git. The published tarball is built once in CI and tested as installed; publication requires `release-accepted.json` binding the version, the tarball digest, the reviewed commit and the workflow itself, and the same acceptance is re-run on the package as npm serves it — see `.github/workflows/publish-mcp.yml` and `CHANGELOG.md` for the versioning policy. Release: push a tag `mcp-v<version>` matching `package.json`, or run the workflow manually and type the version to confirm.
 
 ## Licence
 
