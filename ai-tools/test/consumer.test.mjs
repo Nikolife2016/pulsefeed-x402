@@ -95,9 +95,9 @@ test("core against the live PulseFeed: a known endpoint gets a real verdict; the
   writeFileSync(join(dir, "live.mjs"), `
 import { verifyX402Endpoint, x402TrustCatalog } from "pulsefeed-x402-ai-tools";
 const v = await verifyX402Endpoint("https://pulsefeed.dev/whales"); const c = await x402TrustCatalog();
-console.log(JSON.stringify({ known: v.known, verdict: v.verdict, checkFailed: v.checkFailed ?? false, score: v.score, topHealthy: Array.isArray(c.topHealthy) ? c.topHealthy.length : -1 }));`);
+console.log(JSON.stringify({ known: v.known, verdict: v.verdict, checkFailed: v.checkFailed ?? false, error: v.error ?? null, score: v.score, topHealthy: Array.isArray(c.topHealthy) ? c.topHealthy.length : -1 }));`);
   const o = JSON.parse(await run(dir, "live.mjs"));
-  assert.equal(o.checkFailed, false, JSON.stringify(o)); assert.equal(o.known, true); assert.ok(["safe", "caution", "avoid", "unknown"].includes(o.verdict)); assert.ok(o.topHealthy > 0);
+  assert.equal(o.checkFailed, false, "живой PulseFeed /verify не ответил вердиктом (проверь сервис, не пакет): " + JSON.stringify(o)); assert.equal(o.known, true); assert.ok(["safe", "caution", "avoid", "unknown"].includes(o.verdict)); assert.ok(o.topHealthy > 0);
 });
 
 // Vercel adapter inside generateText with a mock model: what the MODEL sees (input schema) and that the call executes.

@@ -107,7 +107,8 @@ export async function assertSafeUrl(raw: string): Promise<URL> {
 // fetch с проверкой КАЖДОГО редиректа (fetch сам по 302 ушёл бы куда угодно).
 // Таймаут действует на ВСЁ: заголовки и чтение тела (контролёр показал: таймер снимался при заголовках, сигнал
 // вызывающего подменялся, и сервер с незавершающимся телом держал инструмент бесконечно). Сигнал вызывающего
-// объединяется с таймаутом (AbortSignal.any), таймер — unref, чтобы не держать процесс.
+// пересылается в наш; таймер снимается, когда тело дочитано (поток обёрнут), при отмене снаружи или при ошибке —
+// он держит процесс ровно столько, сколько идёт чтение, и не дольше timeoutMs.
 export async function safeFetch(
   raw: string,
   init: RequestInit & { timeoutMs?: number } = {},
@@ -116,24 +117,37 @@ export async function safeFetch(
   const { timeoutMs = 12000, signal: outer, ...rest } = init;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(new Error(`timeout after ${timeoutMs} ms`)), timeoutMs);
-  (timer as any).unref?.();
-  // Сигнал вызывающего объединяется с нашим (AbortSignal.any с Node 20.3; ниже — ручная пересылка).
-  if (outer) { if (outer.aborted) ctrl.abort(outer.reason); else outer.addEventListener("abort", () => ctrl.abort(outer.reason), { once: true }); }
-  const signal = ctrl.signal;
-  let current = raw;
-  for (let hop = 0; hop <= maxRedirects; hop++) {
-    await assertSafeUrl(current);
-    if (signal.aborted) throw new Error("aborted before request");
-    const res = await fetch(current, { ...rest, redirect: "manual", signal });
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get("location");
-      if (!loc) { clearTimeout(timer); return res; }
-      if (hop === maxRedirects) { clearTimeout(timer); throw new SsrfBlocked("слишком много редиректов"); }
-      current = new URL(loc, current).toString();
-      continue;
-    }
-    return res;   // таймер остаётся взведённым: он же оборвёт чтение тела; сработает вхолостую, если тело уже прочитано
+  const done = () => clearTimeout(timer);
+  if (outer) {
+    if (outer.aborted) { done(); ctrl.abort(outer.reason); }
+    else outer.addEventListener("abort", () => { done(); ctrl.abort(outer.reason); }, { once: true });
   }
-  clearTimeout(timer);
-  throw new SsrfBlocked("слишком много редиректов");
+  const signal = ctrl.signal;
+  try {
+    let current = raw;
+    for (let hop = 0; hop <= maxRedirects; hop++) {
+      await assertSafeUrl(current);
+      if (signal.aborted) throw new Error("aborted before request");
+      const res = await fetch(current, { ...rest, redirect: "manual", signal });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) { done(); return res; }
+        if (hop === maxRedirects) throw new SsrfBlocked("слишком много редиректов");
+        current = new URL(loc, current).toString();
+        continue;
+      }
+      return boundedBody(res, done);
+    }
+    throw new SsrfBlocked("слишком много редиректов");
+  } catch (e) { done(); throw e; }
+}
+
+// Ответ, чьё тело при дочитывании снимает таймер. Без тела (204/HEAD) или без потока (моки) — таймер
+// остаётся до срабатывания или до отмены снаружи.
+function boundedBody(res: Response, done: () => void): Response {
+  const body: any = (res as any).body;
+  if (body === null) { done(); return res; }
+  if (!body || typeof body.pipeThrough !== "function" || typeof TransformStream === "undefined") return res;
+  const stream = body.pipeThrough(new TransformStream({ flush() { done(); } }));
+  return new Response(stream, { status: res.status, statusText: res.statusText, headers: res.headers });
 }
