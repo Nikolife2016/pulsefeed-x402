@@ -238,10 +238,18 @@ jobs:
           LOCAL=$(cat artefact/integrity.txt)
           [ "$LOCAL" = "$(node -p "require('./${{ needs.verify.outputs.dir }}/release-accepted.json').integrity")" ] || { echo "::error::artefact digest is not the accepted one"; exit 1; }
           npm publish "$TGZ" --provenance --access public --ignore-scripts
-          sleep 20
-          REMOTE=$(npm view "$NAME@$V" dist.integrity)
+          # npm обрабатывает публикацию асинхронно («being processed and may take a few minutes»): при релизе
+          # mcp 1.1.0 версия появилась через ~45 с, а `sleep 20` дал E404 и уронил job после успешной загрузки.
+          # Ждём до 10 минут, опрашивая реестр; ошибка сети или отсутствие версии по истечении — стоп.
+          REMOTE=""
+          for i in $(seq 1 40); do
+            REMOTE=$(npm view "$NAME@$V" dist.integrity 2>/dev/null || true)
+            [ -n "$REMOTE" ] && break
+            sleep 15
+          done
+          [ -n "$REMOTE" ] || { echo "::error::$NAME@$V is not visible on npm 10 minutes after publish"; exit 1; }
           [ "$REMOTE" = "$LOCAL" ] || { echo "::error::integrity mismatch: npm=$REMOTE local=$LOCAL — npm serves something other than the accepted artefact"; exit 1; }
-          echo "npm serves the exact tarball we tested: $REMOTE"
+          echo "npm serves the exact tarball we tested: $REMOTE (visible after $((i*15)) s)"
       - name: Re-run acceptance against the package as npm serves it
         working-directory: ${{ needs.verify.outputs.dir }}
         env:
