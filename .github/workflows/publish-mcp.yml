@@ -175,10 +175,11 @@ jobs:
           PKG_TEST_LOG: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/acceptance-exchange.jsonl
         run: npm test
       - name: Rehearse the publish command itself (npm publish --dry-run on the same tarball path shape)
-        if: steps.meta.outputs.mode == 'publish' || steps.meta.outputs.mode == 'rehearse'
+        if: steps.meta.outputs.mode != 'register-only'
         working-directory: ${{ steps.meta.outputs.dir }}
+        shell: bash
         run: |
-          set -e
+          set -eo pipefail   # pipefail: иначе `| tee` прячет код выхода npm (контролёр показал: заглушка с кодом 42 проходила)
           mkdir -p ../artefact && cp "${{ steps.meta.outputs.tgz }}" ../artefact/
           cd .. && npm publish "./artefact/${{ steps.meta.outputs.tgz }}" --dry-run --access public --ignore-scripts 2>&1 | tee publish-dry-run.txt
           grep -q "Tarball Contents" publish-dry-run.txt || { echo "::error::npm publish --dry-run did not describe the tarball — the publish argument is wrong"; exit 1; }
