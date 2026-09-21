@@ -19,7 +19,7 @@
     "test": "node --test test/consumer.test.mjs"
   },
   "peerDependencies": {
-    "zod": ">=3",
+    "zod": ">=3 <5",
     "ai": ">=3 <8",
     "@langchain/core": ">=0.2 <2"
   },

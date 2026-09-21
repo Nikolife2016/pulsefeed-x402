@@ -33,7 +33,7 @@ await generateText({
 });
 ```
 
-Works on `ai` 3–7: the tools carry both `parameters` (ai 3/4) and `inputSchema` (ai 5+).
+Works on `ai` 3–7 (the tools carry both `parameters` for ai 3/4 and `inputSchema` for ai 5+) and on Zod 3 or 4.
 
 ## LangChain
 

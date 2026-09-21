@@ -43,10 +43,11 @@ mock.unref();   // the mock must not keep the test process alive
 const MOCK = `http://127.0.0.1:${mock.address().port}`;
 
 const consumers = {};
-for (const [name, deps] of Object.entries({ "ai4-core03": ["ai@^4", "@langchain/core@^0.3"], "ai7-core1": ["ai@^7", "@langchain/core@^1"] })) {
+// Три потребителя: старые мажоры (ai 4, core 0.3, zod 3), текущие (ai 7, core 1, zod 3) и текущие на Zod 4.
+for (const [name, deps] of Object.entries({ "ai4-core03": ["ai@^4", "@langchain/core@^0.3", "zod@^3.23"], "ai7-core1": ["ai@^7", "@langchain/core@^1", "zod@^3.23"], "ai7-core1-zod4": ["ai@^7", "@langchain/core@^1", "zod@^4"] })) {
   const dir = mkdtempSync(join(tmpdir(), `pf-ai-tools-${name}-`));
   execFileSync("npm", ["init", "-y"], { cwd: dir, stdio: "ignore" });
-  execFileSync("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--silent", tgz, "zod@^3.23", "typescript@^5.9", ...deps], { cwd: dir, stdio: "ignore" });
+  execFileSync("npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--silent", tgz, "typescript@^5.9", ...deps], { cwd: dir, stdio: "ignore" });
   consumers[name] = dir;
 }
 // Child scripts run ASYNCHRONOUSLY: a synchronous child would block this process's event loop, and the mock
@@ -60,8 +61,9 @@ test("tarball: exactly dist/{core,vercel,langchain}.{js,d.ts}, README, CHANGELOG
 });
 
 test("consumers got the intended framework majors", () => {
-  assert.match(installed(consumers["ai4-core03"], "ai"), /^4\./); assert.match(installed(consumers["ai4-core03"], "@langchain/core"), /^0\.3\./);
-  assert.match(installed(consumers["ai7-core1"], "ai"), /^7\./); assert.match(installed(consumers["ai7-core1"], "@langchain/core"), /^1\./);
+  assert.match(installed(consumers["ai4-core03"], "ai"), /^4\./); assert.match(installed(consumers["ai4-core03"], "@langchain/core"), /^0\.3\./); assert.match(installed(consumers["ai4-core03"], "zod"), /^3\./);
+  assert.match(installed(consumers["ai7-core1"], "ai"), /^7\./); assert.match(installed(consumers["ai7-core1"], "@langchain/core"), /^1\./); assert.match(installed(consumers["ai7-core1"], "zod"), /^3\./);
+  assert.match(installed(consumers["ai7-core1-zod4"], "ai"), /^7\./); assert.match(installed(consumers["ai7-core1-zod4"], "@langchain/core"), /^1\./); assert.match(installed(consumers["ai7-core1-zod4"], "zod"), /^4\./);
 });
 
 const CORE = `
@@ -124,7 +126,7 @@ const model = new MockLanguageModelV4({ doGenerate: async (o) => { seen = (o.too
 const r = await generateText({ model, tools, stopWhen: stepCountIs(3), prompt: "Is https://scam.example/api safe?" });
 const results = r.steps.flatMap(s => s.toolResults ?? []).map(t => ({ toolName: t.toolName, verdict: t.output?.verdict, checkFailed: t.output?.checkFailed ?? false }));
 console.log(JSON.stringify({ seen, results, defaultNames: Object.keys(pulsefeedTools) }));`;
-for (const [name, src] of [["ai4-core03", VERCEL_AI4], ["ai7-core1", VERCEL_AI7]]) {
+for (const [name, src] of [["ai4-core03", VERCEL_AI4], ["ai7-core1", VERCEL_AI7], ["ai7-core1-zod4", VERCEL_AI7]]) {
   test(`Vercel AI SDK (${name}): generateText shows the model the endpoint parameter and executes the tool`, async () => {
     writeFileSync(join(consumers[name], "vercel.mjs"), src);
     const o = JSON.parse(await run(consumers[name], "vercel.mjs"));

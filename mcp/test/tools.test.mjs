@@ -11,6 +11,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync, appendFileSync } from "n
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const PKG = resolve(new URL("..", import.meta.url).pathname);
 const SNAPSHOT = JSON.parse(readFileSync(new URL("./live-tools.snapshot.json", import.meta.url), "utf8"));
@@ -51,13 +52,12 @@ function session(requests, { backend = LIVE, timeoutMs = 60_000 } = {}) {
     }, 100);
   });
 }
-// Настоящее сообщение JSON-RPC 2.0: уведомление (строковый method, без id) или ответ (id число/строка и РОВНО одно из result/error).
-const isRpc = m => m && typeof m === "object" && m.jsonrpc === "2.0" && (
-  (!("id" in m) && typeof m.method === "string") ||
-  (("id" in m) && (typeof m.id === "number" || typeof m.id === "string") && (("result" in m) !== ("error" in m))));
+// Настоящее сообщение JSON-RPC 2.0 — по схеме самого MCP SDK (JSONRPCMessageSchema), а не по своей аппроксимации:
+// контролёр показал, что {id:9, error:"garbage"} и {method:"notice", params:42} проходили самодельную проверку.
+const isRpc = m => !!m && typeof m === "object" && !("__junk" in m) && JSONRPCMessageSchema.safeParse(m).success;
 const strict = (s, ids) => {
   assert.equal(s.code, 0, "код выхода сервера не 0: " + s.code + " stderr: " + s.err.slice(0, 200));
-  const junk = s.msgs.filter(m => m.__junk || !isRpc(m));
+  const junk = s.msgs.filter(m => !isRpc(m));
   assert.equal(junk.length, 0, "в stdout не-JSON-RPC: " + JSON.stringify(junk.slice(0, 2)));
   const init = s.msgs.find(m => m.id === 1); assert.ok(init?.result?.serverInfo?.name === "pulsefeed-x402", "initialize не вернул serverInfo: " + JSON.stringify(init).slice(0, 160));
   for (const id of ids) { const m = s.msgs.find(x => x.id === id); assert.ok(m, "нет ответа на id " + id); assert.ok(!m.error, `RPC-ошибка на id ${id}: ` + JSON.stringify(m.error)); }
@@ -70,13 +70,11 @@ const canon = sc => { const c = JSON.parse(JSON.stringify(sc ?? {})); delete c.$
   for (const v of Object.values(c.properties ?? {})) delete v.description; return deep(c); };
 const sameSchema = (a, b) => canon(a) === canon(b);
 
-test("тарбол: РОВНО dist/*.js, README, CHANGELOG, LICENSE и package.json — ничего лишнего", () => {
+test("тарбол: РОВНО dist/{index,ssrfGuard,x402Challenge}.js, README, CHANGELOG, LICENSE и package.json — ничего лишнего", () => {
   const list = execFileSync("tar", ["-tzf", tgz], { encoding: "utf8" }).split("\n").filter(Boolean).sort();
   const nonDist = list.filter(f => !f.startsWith("package/dist/"));
   assert.deepEqual(nonDist, ["package/CHANGELOG.md", "package/LICENSE", "package/README.md", "package/package.json"]);
-  const dist = list.filter(f => f.startsWith("package/dist/"));
-  assert.ok(dist.includes("package/dist/index.js") && dist.includes("package/dist/ssrfGuard.js"), "нет dist/index.js или dist/ssrfGuard.js");
-  assert.ok(dist.every(f => /\.js$/.test(f)), "в dist не только .js: " + dist.join(","));
+  assert.deepEqual(list.filter(f => f.startsWith("package/dist/")), ["package/dist/index.js", "package/dist/ssrfGuard.js", "package/dist/x402Challenge.js"]);
 });
 
 test("tools/list установленного пакета: имена И схемы == снимок живого сервера; stdout чистый; выход 0", async () => {
@@ -243,6 +241,33 @@ test("mcp_check_server и x402_incidents(days): регрессия прежни�
   strict(s, [9, 10]);
   const a = body(s, 9); assert.ok(!a.r.isError && typeof a.j.verdict === "string" && (a.j.id === "mcp-remote" || a.j.target === "mcp-remote"), "аудит пакета без verdict/id: " + JSON.stringify(a.j).slice(0, 160));
   const b = body(s, 10); assert.ok(!b.r.isError && Array.isArray(b.j.incidents), "incidents без массива incidents");
+});
+
+test("контроль валидатора протокола: схема SDK принимает настоящие сообщения и отклоняет мусор", () => {
+  for (const ok of [{ jsonrpc: "2.0", id: 1, result: {} }, { jsonrpc: "2.0", id: "a", error: { code: -32600, message: "x" } }, { jsonrpc: "2.0", method: "notifications/initialized" }, { jsonrpc: "2.0", method: "n", params: { a: 1 } }]) assert.ok(isRpc(ok), "отклонено настоящее: " + JSON.stringify(ok));
+  for (const bad of [{ jsonrpc: "2.0", id: 9, error: "garbage" }, { jsonrpc: "2.0", method: "notice", params: 42 }, { jsonrpc: "2.0", method: 42 }, { jsonrpc: "2.0", id: 1 }, { jsonrpc: "2.0", id: 1, result: {}, error: { code: 1, message: "x" } }, { jsonrpc: "1.0", id: 1, result: {} }, { __junk: "not json" }, "str", null]) assert.ok(!isRpc(bad), "принят мусор: " + JSON.stringify(bad));
+});
+
+test("парсер x402-челленджа из тарбола: валидные v1/v2 принимаются, {}/'garbage'/null/неполные предложения — нет", async () => {
+  const { parseChallenge, parseOffer } = await import(join(consumer, "node_modules", "pulsefeed-x402-mcp", "dist", "x402Challenge.js"));
+  const v1 = { scheme: "exact", network: "base", payTo: "0x7f5f784Ba98cEcFC0bA4336f0E48222A3d4d69a8", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", maxAmountRequired: "10000" };
+  const v2 = { scheme: "exact", network: "eip155:8453", payTo: "0x7f5f784Ba98cEcFC0bA4336f0E48222A3d4d69a8", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "10000" };
+  assert.deepEqual(parseChallenge({ x402Version: 1, accepts: [v1] }), [{ scheme: "exact", network: "base", payTo: v1.payTo, asset: v1.asset, amount: "10000", version: 1 }]);
+  assert.deepEqual(parseChallenge({ x402Version: 2, accepts: [v2] }), [{ scheme: "exact", network: "eip155:8453", payTo: v2.payTo, asset: v2.asset, amount: "10000", version: 2 }]);
+  assert.equal(parseChallenge({ accepts: [{}, "garbage", null, v2] }).length, 1, "мусор рядом с валидным должен отбрасываться, валидное — остаться");
+  for (const bad of [{ accepts: [{}] }, { accepts: ["garbage"] }, { accepts: [null] }, { accepts: {} }, {}, null, "x", [], { accepts: [] },
+    { accepts: [{ ...v2, payTo: "not-an-address" }] }, { accepts: [{ ...v2, amount: "1.5" }] }, { accepts: [{ ...v2, amount: "abc" }] }, { accepts: [{ ...v2, scheme: "" }] }, { accepts: [{ ...v2, asset: undefined }] }, { accepts: [{ ...v1, maxAmountRequired: undefined }] }])
+    assert.deepEqual(parseChallenge(bad), [], "принят невалидный челлендж: " + JSON.stringify(bad));
+  assert.equal(parseOffer({ ...v2, amount: 10000 }).amount, "10000", "целое число как сумма допустимо");
+  assert.equal(parseOffer({ ...v2, amount: -1 }), null);
+});
+
+test("check_x402_endpoint против живого сервера: настоящий 402-челлендж → valid:true, цена/сеть/получатель/версия заполнены", async () => {
+  const s = await session([INIT, READY, { jsonrpc: "2.0", id: 31, method: "tools/call", params: { name: "check_x402_endpoint", arguments: { url: "https://pulsefeed.dev/whales" } } }], { timeoutMs: 60_000 });
+  strict(s, [31]); const { r, j } = body(s, 31); assert.ok(!r.isError);
+  assert.equal(j.status, 402); assert.equal(j.valid, true); assert.equal(j.reachable, true);
+  assert.match(j.payTo, /^0x[0-9a-fA-F]{40}$/); assert.match(j.price, /^\d+$/); assert.ok(typeof j.network === "string" && j.network); assert.ok([1, 2].includes(j.x402Version));
+  assert.match(j.verdict, /^live/);
 });
 
 test("отрицательный контроль снимка: лишний инструмент или изменённая схема не совпадают", () => {

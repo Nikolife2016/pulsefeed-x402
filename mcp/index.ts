@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { safeFetch, SsrfBlocked } from "./ssrfGuard.js";
+import { parseChallenge } from "./x402Challenge.js";
 
 const BASE = process.env.PULSEFEED_URL || "https://pulsefeed.dev";
 
@@ -66,9 +67,10 @@ server.registerTool(
       out.status = res.status;
       if (res.status === 402) {
         const b: any = await res.json().catch(() => null);
-        const a = b?.accepts?.[0];
-        out.valid = !!a;
-        if (a) { out.price = a.maxAmountRequired; out.network = a.network; out.asset = a.asset; out.payTo = a.payTo; }
+        const offers = parseChallenge(b);
+        out.valid = offers.length > 0;
+        if (offers.length) { const a = offers[0]; out.price = a.amount; out.network = a.network; out.asset = a.asset; out.payTo = a.payTo; out.x402Version = a.version; out.offers = offers.length; }
+        else out.error = "402 without a valid x402 payment offer (needs scheme, network, payTo, asset and an integer amount)";
       }
     } catch (e: any) {
       // Заблокированный адрес — не сбой сети, и пользователь должен понимать разницу:

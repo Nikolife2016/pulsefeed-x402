@@ -20,9 +20,11 @@ life is treated as minor and is stated here.
 - Response bodies are validated (`known` boolean, `verdict` in the known set; the catalog needs a
   `topHealthy` array and an `ecosystem` object) before being returned.
 - Types: the Vercel tool set is a type alias assignable to `generateText`'s `ToolSet` (an interface was not:
-  TS2322); the LangChain adapter is declared as `StructuredToolInterface[]`, so its `.d.ts` compiles on
-  `@langchain/core` 0.3 as well as 1.x. The README example is compiled verbatim in the acceptance test on
-  ai 4 and ai 7.
+  TS2322); its schema fields are typed `any` so the `.d.ts` names no Zod type and compiles on Zod 3 and Zod 4
+  (naming Zod 3's `ZodObject` broke Zod 4 consumers with TS2707); the LangChain adapter is declared as
+  `StructuredToolInterface[]`, so its `.d.ts` compiles on `@langchain/core` 0.3 as well as 1.x. Peer range
+  `zod >=3 <5`. The README example is compiled verbatim in the acceptance test on ai 4 and ai 7; consumers are
+  tested on (ai 4, core 0.3, zod 3), (ai 7, core 1, zod 3) and (ai 7, core 1, zod 4).
 - Tool descriptions and the package description no longer carry a broken placeholder for the share of dead
   endpoints; the live figure is referenced instead.
 - `engines.node` raised from `>=18` to `>=20` (Node 18 end of life 30 April 2025; tested on 20 and 24).

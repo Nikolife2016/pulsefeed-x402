@@ -16,16 +16,20 @@ const verifyInput = z.object({
 });
 const catalogInput = z.object({});
 
-/** One tool object as both ai 3/4 (`parameters`) and ai 5+ (`inputSchema`) read it. */
-export type PulsefeedVercelTool<I, O> = { description: string; parameters: I; inputSchema: I; execute: (input: any) => Promise<O> };
+/**
+ * One tool object as both ai 3/4 (`parameters`) and ai 5+ (`inputSchema`) read it.
+ * The schema fields are typed `any` on purpose: naming the Zod object type would bake Zod 3's five type
+ * parameters into our .d.ts, which does not compile for a consumer on Zod 4 (TS2707; found by the controller
+ * 21.09.2026). Runtime is the consumer's own `zod` (3 or 4); the input type is stated on `execute`.
+ */
+export type PulsefeedVercelTool<I, O> = { description: string; parameters: any; inputSchema: any; execute: (input: I) => Promise<O> };
 /**
  * A type alias (not an interface): `generateText({ tools })` expects a `ToolSet` = `Record<string, Tool>`, and only
- * object type literals get the implicit index signature that makes them assignable to a Record (found by the
- * controller 21.09.2026: with an interface the README example failed with TS2322 on ai 4 and ai 7).
+ * object type literals get the implicit index signature that makes them assignable to a Record (TS2322 otherwise).
  */
 export type PulsefeedVercelTools = {
-  verifyX402Endpoint: PulsefeedVercelTool<typeof verifyInput, VerifyResult>;
-  x402TrustCatalog: PulsefeedVercelTool<typeof catalogInput, any>;
+  verifyX402Endpoint: PulsefeedVercelTool<{ endpoint: string }, VerifyResult>;
+  x402TrustCatalog: PulsefeedVercelTool<Record<string, never>, any>;
 };
 
 /** PulseFeed tools for the Vercel AI SDK. With options (own apiUrl / timeout) — createPulsefeedTools. */

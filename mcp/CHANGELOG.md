@@ -15,6 +15,10 @@ reached end of life is treated as minor and is stated here.
   clean") when PulseFeed answers with a non-2xx status, non-JSON, an unexpected body, or malformed drift
   events (an event needs non-empty `id`, `type` and a parseable `at`). Before, backend failures could surface
   as an exception or, for `pulsefeed_products`, as raw HTML.
+- `check_x402_endpoint` validates the 402 body before saying `valid: true`: a payment offer needs `scheme`,
+  `network`, an EVM `payTo`, `asset` and an integer amount (`maxAmountRequired` for x402 v1, `amount` for v2).
+  Before, `{"accepts":[{}]}` or `{"accepts":["garbage"]}` counted as a valid challenge and produced the verdict
+  "safe to consider paying". The answer now also carries `x402Version` and the number of valid `offers`.
 - `pulsefeed_products` requests JSON explicitly (the root route serves HTML without `accept: application/json`).
 - `x402_changes` and `x402_incidents` accept `days`; `mcp_drift_check` limits `packages` to 200 and `days`
   to 1–365, matching the live server.
