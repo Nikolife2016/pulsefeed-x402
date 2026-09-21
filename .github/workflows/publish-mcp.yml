@@ -17,7 +17,8 @@
 #     `npm publish` (docs.npmjs.com/trusted-publishers, Limitations) — `dist-tag add` под ним не работает,
 #     поэтому схема «сначала next, потом latest» невозможна; вся приёмка идёт ДО публикации;
 #   • любой провал сборки, теста, несовпадение тега с версией или мусор в git останавливают релиз;
-#   • ручной запуск проходит те же проверки, что и тег — обхода нет; режим verify-only ничего не публикует;
+#   • ручной запуск проходит те же проверки, что и тег — обхода нет; режимы verify-only и rehearse ничего
+#     не публикуют (rehearse — полная репетиция релиза: и запись допуска, и digest проверяются);
 #   • инструменты закреплены: node 24.15.0, npm 11.7.0, mcp-publisher v1.8.1 с проверкой SHA-256.
 #
 # АУТЕНТИФИКАЦИЯ В NPM — OIDC (Trusted Publishing), токен не нужен: гранулярный NPM_TOKEN истекает
@@ -45,10 +46,10 @@ on:
         type: choice
         options: [mcp, guard]
       mode:
-        description: "verify-only — собрать, проверить, напечатать digest (ничего не публикует); publish — опубликовать; register-only — только зарегистрировать уже опубликованную версию в MCP Registry (запускать на ref тега)"
+        description: "verify-only — собрать, проверить, напечатать digest (ничего не публикует); rehearse — то же плюс проверка записи допуска (SHA, workflow, digest), без публикации; publish — опубликовать; register-only — только зарегистрировать уже опубликованную версию в MCP Registry (запускать на ref тега)"
         required: true
         type: choice
-        options: [verify-only, publish, register-only]
+        options: [verify-only, rehearse, publish, register-only]
         default: verify-only
       confirm:
         description: "Точная версия из package.json (подтверждение)"
@@ -125,7 +126,7 @@ jobs:
           if [ "$PKG" = "mcp" ]; then [ "$(node -p "require('./server.json').version")" = "$V" ] || { echo "::error::server.json version differs from mcp/package.json"; exit 1; }; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"; echo "dir=$PKG" >> "$GITHUB_OUTPUT"; echo "name=$NAME" >> "$GITHUB_OUTPUT"; echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "tgz=$NAME-$V.tgz" >> "$GITHUB_OUTPUT"
-      - name: Acceptance record must bind THIS commit and THIS workflow (publish / register-only)
+      - name: Acceptance record must bind THIS commit and THIS workflow (rehearse / publish / register-only)
         if: steps.meta.outputs.mode != 'verify-only'
         env:
           PKG: ${{ steps.meta.outputs.dir }}
@@ -173,7 +174,7 @@ jobs:
           PKG_TEST_LOG: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/acceptance-exchange.jsonl
         run: npm test
       - name: Digest must equal the one accepted by the controller (release-accepted.json)
-        if: steps.meta.outputs.mode == 'publish'
+        if: steps.meta.outputs.mode == 'publish' || steps.meta.outputs.mode == 'rehearse'
         working-directory: ${{ steps.meta.outputs.dir }}
         run: |
           set -e
