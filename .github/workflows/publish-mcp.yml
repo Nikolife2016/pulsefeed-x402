@@ -6,24 +6,31 @@
 # публикацией не проверяло, что поставляется. Правильная сборка не защищает от потери функций —
 # защищает приёмка того, что поставляется. Поэтому:
 #   • собираем ОДИН раз, тестируем ИМЕННО тарбол: установка в чистый каталог без dev-зависимостей и без
-#     lifecycle-скриптов, запуск bin по stdio, имена И схемы инструментов против датированного снимка
-#     живого сервера, вызовы инструментов, отказ бэкенда;
+#     lifecycle-скриптов, запуск bin по stdio, имена И полные схемы инструментов против датированного
+#     снимка живого сервера, вызов всех инструментов, отказы и повреждённые ответы бэкенда;
+#   • публикация возможна только при записи допуска <pkg>/release-accepted.json, которая связывает
+#     ВЕРСИЮ, DIGEST тарбола, SHA проверенного коммита и SHA-256 этого workflow. Публикуемый коммит —
+#     либо принятый SHA, либо его потомок, меняющий ТОЛЬКО файл допуска; digest сборки в CI обязан
+#     совпасть с принятым. Иное — остановка;
 #   • публикуем ТОТ ЖЕ файл и сверяем его digest с тем, что отдаёт npm, а затем гоняем ту же приёмку
 #     на пакете, скачанном ИЗ npm. Публикуем сразу в latest: OIDC-токен npm авторизует только
 #     `npm publish` (docs.npmjs.com/trusted-publishers, Limitations) — `dist-tag add` под ним не работает,
 #     поэтому схема «сначала next, потом latest» невозможна; вся приёмка идёт ДО публикации;
-#   • публикуемый digest обязан совпасть с digest, принятым контролёром до тега (<pkg>/release-accepted.json);
 #   • любой провал сборки, теста, несовпадение тега с версией или мусор в git останавливают релиз;
-#   • ручной запуск проходит те же проверки, что и тег — обхода нет; режим verify-only ничего не публикует.
+#   • ручной запуск проходит те же проверки, что и тег — обхода нет; режим verify-only ничего не публикует;
+#   • инструменты закреплены: node 24.15.0, npm 11.7.0, mcp-publisher v1.8.1 с проверкой SHA-256.
 #
 # АУТЕНТИФИКАЦИЯ В NPM — OIDC (Trusted Publishing), токен не нужен: гранулярный NPM_TOKEN истекает
 # 28.10.2026, а с января 2027 токены теряют право публикации. Доверенный издатель настраивается на
 # npmjs.com для КАЖДОГО пакета (репозиторий + имя этого файла). Первую версию нового пакета через
 # OIDC опубликовать нельзя (npm/cli#8544) — бутстрап вручную, один раз.
 #
-# Триггеры: тег `<pkg>-v<version>` (mcp-v1.0.8, guard-v1.0.1; совпадение с package.json проверяется)
+# Триггеры: тег `<pkg>-v<version>` (mcp-v1.1.0, guard-v1.1.0; совпадение с package.json проверяется)
 # или ручной запуск с явным выбором пакета. Один запуск — один пакет.
 # Пакеты: mcp → pulsefeed-x402-mcp (+ регистрация в MCP Registry); guard → pulsefeed-x402-guard.
+# register-only (восстановление регистрации после успешной публикации в npm) запускается ТОЛЬКО на
+# ref тега релиза: проверяет ту же запись допуска, сверяет digest, который отдаёт npm, с принятым,
+# регистрирует и проверяет, что Registry отдаёт эту версию.
 # ⚠️ guard через OIDC публикуется только после того, как для него на npmjs.com настроен доверенный
 # издатель (этот репозиторий + publish-mcp.yml). До этого шаг publish у guard упадёт — и это видно.
 name: Publish packages (npm + official MCP registry)
@@ -38,7 +45,7 @@ on:
         type: choice
         options: [mcp, guard]
       mode:
-        description: "verify-only — собрать, проверить, напечатать digest (ничего не публикует); publish — опубликовать; register-only — только зарегистрировать уже опубликованную версию в MCP Registry"
+        description: "verify-only — собрать, проверить, напечатать digest (ничего не публикует); publish — опубликовать; register-only — только зарегистрировать уже опубликованную версию в MCP Registry (запускать на ref тега)"
         required: true
         type: choice
         options: [verify-only, publish, register-only]
@@ -53,10 +60,16 @@ concurrency:
   cancel-in-progress: false
 permissions:
   contents: read
+env:
+  NODE_VERSION: "24.15.0"
+  NPM_VERSION: "11.7.0"
+  MCP_PUBLISHER_VERSION: "v1.8.1"
+  # sha256 mcp-publisher_linux_amd64.tar.gz из registry_1.8.1_checksums.txt, пересчитан независимо 21.09.2026.
+  MCP_PUBLISHER_SHA256: "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc"
 
 jobs:
   verify:
-    name: verify (build once, test the tarball)
+    name: verify (bind to acceptance, build once, test the tarball)
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -66,16 +79,20 @@ jobs:
       mode: ${{ steps.meta.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # привязка к принятому SHA требует истории
       - uses: actions/setup-node@v4
         with:
-          node-version: "24.15.0"
-      - name: Guard against build artefacts tracked in git
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Pin npm (same version in every job)
+        run: npm install -g "npm@$NPM_VERSION" && npm --version && node --version
+      - name: Build artefacts must not be tracked in git
         run: |
           set -e
           if git ls-files | grep -E '(^|/)(node_modules|dist)(/|$)'; then
-            echo "::error::node_modules or dist is tracked in git — this is how 06.08.2026 happened. Untrack them."; exit 1
+            echo "::error::node_modules or dist is tracked in git. The release is built from src in this workflow; a committed dist can silently diverge from src. Untrack them."; exit 1
           fi
-          echo "git tree clean of artefacts"
+          echo "git tree clean of build artefacts"
       - name: Resolve package, version must match the tag / the confirmation
         id: meta
         env:
@@ -108,6 +125,27 @@ jobs:
           if [ "$PKG" = "mcp" ]; then [ "$(node -p "require('./server.json').version")" = "$V" ] || { echo "::error::server.json version differs from mcp/package.json"; exit 1; }; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"; echo "dir=$PKG" >> "$GITHUB_OUTPUT"; echo "name=$NAME" >> "$GITHUB_OUTPUT"; echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "tgz=$NAME-$V.tgz" >> "$GITHUB_OUTPUT"
+      - name: Acceptance record must bind THIS commit and THIS workflow (publish / register-only)
+        if: steps.meta.outputs.mode != 'verify-only'
+        env:
+          PKG: ${{ steps.meta.outputs.dir }}
+          V: ${{ steps.meta.outputs.version }}
+        run: |
+          set -e
+          F="$PKG/release-accepted.json"
+          test -f "$F" || { echo "::error::no $F — nothing was accepted for publication"; exit 1; }
+          A_SHA=$(node -p "require('./$F').sha || ''"); A_V=$(node -p "require('./$F').version || ''"); A_WF=$(node -p "require('./$F').workflowSha256 || ''")
+          [ "$A_V" = "$V" ] || { echo "::error::$F accepts version '$A_V', this release is $V"; exit 1; }
+          echo "$A_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::$F has no 40-hex sha"; exit 1; }
+          git cat-file -e "$A_SHA^{commit}" 2>/dev/null || { echo "::error::accepted sha $A_SHA is not in this repository's history"; exit 1; }
+          if [ "$A_SHA" != "$GITHUB_SHA" ]; then
+            git merge-base --is-ancestor "$A_SHA" "$GITHUB_SHA" || { echo "::error::accepted sha $A_SHA is not an ancestor of $GITHUB_SHA"; exit 1; }
+            CHANGED=$(git diff --name-only "$A_SHA" "$GITHUB_SHA")
+            [ "$CHANGED" = "$F" ] || { echo "::error::between accepted $A_SHA and $GITHUB_SHA more than the acceptance record changed:"; echo "$CHANGED"; exit 1; }
+          fi
+          WF=$(sha256sum .github/workflows/publish-mcp.yml | cut -d' ' -f1)
+          [ "$A_WF" = "$WF" ] || { echo "::error::this workflow ($WF) is not the one accepted ($A_WF)"; exit 1; }
+          echo "acceptance binds sha $A_SHA (this commit: $GITHUB_SHA), workflow $WF, version $V; accepted by $(node -p "require('./$F').acceptedBy") on $(node -p "require('./$F').acceptedAt")"
       - name: Install (lockfile, dev included) and build once
         if: steps.meta.outputs.mode != 'register-only'
         working-directory: ${{ steps.meta.outputs.dir }}
@@ -124,21 +162,21 @@ jobs:
           set -e
           npm pack --json --ignore-scripts > pack.json     # dist уже собран; prepack не запускаем повторно
           node -e 'const p=require("./pack.json")[0]; console.log("files:",p.entryCount,"size:",p.size,"integrity:",p.integrity); require("fs").writeFileSync("integrity.txt",p.integrity); console.log(p.files.map(f=>f.path).join("\n"))'
-          tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -E "node_modules|\.env|\.pem" && { echo "::error::tarball carries files it must not"; exit 1; } || true
-          tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -q "package/dist/index.js" || { echo "::error::tarball lacks dist/index.js"; exit 1; }
+          tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -E "node_modules|\.env|\.pem|release-accepted" && { echo "::error::tarball carries files it must not"; exit 1; } || true
+          tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -q "package/LICENSE" || { echo "::error::tarball lacks LICENSE"; exit 1; }
           git status --porcelain | grep -v -E "(^|/)(pack.json|integrity.txt|.*\.tgz)$" | grep . && { echo "::error::build left the checkout dirty"; exit 1; } || echo "checkout clean after build"
       - name: Acceptance test against the tarball (installed as a consumer would)
         if: steps.meta.outputs.mode != 'register-only'
         working-directory: ${{ steps.meta.outputs.dir }}
         env:
           PKG_TGZ: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/${{ steps.meta.outputs.tgz }}
+          PKG_TEST_LOG: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/acceptance-exchange.jsonl
         run: npm test
       - name: Digest must equal the one accepted by the controller (release-accepted.json)
         if: steps.meta.outputs.mode == 'publish'
         working-directory: ${{ steps.meta.outputs.dir }}
         run: |
           set -e
-          test -f release-accepted.json || { echo "::error::no release-accepted.json — nothing was accepted for publication"; exit 1; }
           node -e '
             const a=require("./release-accepted.json"), v=process.argv[1], got=require("fs").readFileSync("integrity.txt","utf8").trim();
             if (a.version!==v) { console.error("::error::accepted version "+a.version+" != "+v); process.exit(1); }
@@ -151,6 +189,8 @@ jobs:
           path: |
             ${{ steps.meta.outputs.dir }}/${{ steps.meta.outputs.tgz }}
             ${{ steps.meta.outputs.dir }}/integrity.txt
+            ${{ steps.meta.outputs.dir }}/pack.json
+            ${{ steps.meta.outputs.dir }}/acceptance-exchange.jsonl
           if-no-files-found: error
           retention-days: 30
 
@@ -166,14 +206,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24.15.0"
+          node-version: ${{ env.NODE_VERSION }}
           registry-url: "https://registry.npmjs.org"
       - uses: actions/download-artifact@v4
         with:
           name: tarball
           path: artefact
-      - name: Ensure npm supports trusted publishing (pinned)
-        run: npm install -g npm@11.7.0 && npm --version
+      - name: Pin npm (trusted publishing needs >= 11.5.1)
+        run: npm install -g "npm@$NPM_VERSION" && npm --version
       - name: Publish the same tarball (straight to latest — OIDC authorises publish only, not dist-tag)
         env:
           V: ${{ needs.verify.outputs.version }}
@@ -181,10 +221,11 @@ jobs:
           TGZ: artefact/${{ needs.verify.outputs.tgz }}
         run: |
           set -e
+          LOCAL=$(cat artefact/integrity.txt)
+          [ "$LOCAL" = "$(node -p "require('./${{ needs.verify.outputs.dir }}/release-accepted.json').integrity")" ] || { echo "::error::artefact digest is not the accepted one"; exit 1; }
           npm publish "$TGZ" --provenance --access public --ignore-scripts
           sleep 20
           REMOTE=$(npm view "$NAME@$V" dist.integrity)
-          LOCAL=$(cat artefact/integrity.txt)
           [ "$REMOTE" = "$LOCAL" ] || { echo "::error::integrity mismatch: npm=$REMOTE local=$LOCAL — npm serves something other than the accepted artefact"; exit 1; }
           echo "npm serves the exact tarball we tested: $REMOTE"
       - name: Re-run acceptance against the package as npm serves it
@@ -205,41 +246,25 @@ jobs:
           set -e
           TAGS=$(npm view "$NAME" dist-tags --json); echo "$TAGS"
           [ "$(node -e 'console.log(JSON.parse(process.argv[1]).latest)' "$TAGS")" = "$V" ] || { echo "::error::latest is not $V"; exit 1; }
-      - name: Install mcp-publisher
+      - name: Install mcp-publisher (pinned version, SHA-256 checked)
         if: needs.verify.outputs.dir == 'mcp'
         run: |
-          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
-      - name: Sync server.json with the published version
-        if: needs.verify.outputs.dir == 'mcp'
-        env:
-          V: ${{ needs.verify.outputs.version }}
-        run: |
-          node -e '
-            const fs = require("fs"); const v = process.env.V;
-            const s = JSON.parse(fs.readFileSync("server.json", "utf8"));
-            s.version = v;
-            for (const p of s.packages ?? []) if (p.identifier === "pulsefeed-x402-mcp") p.version = v;
-            fs.writeFileSync("server.json", JSON.stringify(s, null, 2) + "\n");
-            console.log("server.json →", v);'
+          set -e
+          curl -sSfL -o mp.tgz "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$MCP_PUBLISHER_SHA256  mp.tgz" | sha256sum -c -
+          tar xzf mp.tgz mcp-publisher && ./mcp-publisher --version
       - name: Register in the official MCP Registry (OIDC)
         if: needs.verify.outputs.dir == 'mcp'
         run: |
+          set -e
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
       - name: Verify the registry lists this version
         if: needs.verify.outputs.dir == 'mcp'
-        env:
-          V: ${{ needs.verify.outputs.version }}
-        run: |
-          sleep 10
-          curl -sf "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.Nikolife2016/pulsefeed-x402" -o reg.json
-          node -e '
-            const v=process.argv[1]; const d=JSON.parse(require("fs").readFileSync("reg.json","utf8")); const ss=(d.servers||[]).map(s=>s.server||s);
-            const hit=ss.find(s=>s.name==="io.github.Nikolife2016/pulsefeed-x402"&&s.version===v&&(s.packages||[]).some(p=>p.identifier==="pulsefeed-x402-mcp"&&p.version===v&&p.transport&&p.transport.type==="stdio"));
-            if(!hit){console.error("::error::registry does not list io.github.Nikolife2016/pulsefeed-x402@"+v+" with npm pulsefeed-x402-mcp@"+v+" stdio"); process.exit(1);} console.log("registry lists", hit.name, hit.version);' "$V"
+        run: sleep 10 && node .github/scripts/registry-lists.mjs "${{ needs.verify.outputs.version }}"
 
   register-only:
-    name: register an already-published version in the MCP Registry
+    name: register an already-published, accepted version in the MCP Registry
     needs: verify
     if: needs.verify.outputs.mode == 'register-only' && needs.verify.outputs.dir == 'mcp'
     runs-on: ubuntu-latest
@@ -248,7 +273,31 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Pin npm
+        run: npm install -g "npm@$NPM_VERSION" && npm --version
+      - name: npm must serve the accepted artefact
+        env:
+          V: ${{ needs.verify.outputs.version }}
+          NAME: ${{ needs.verify.outputs.name }}
+        run: |
+          set -e
+          REMOTE=$(npm view "$NAME@$V" dist.integrity)
+          ACCEPTED=$(node -p "require('./mcp/release-accepted.json').integrity")
+          [ "$REMOTE" = "$ACCEPTED" ] || { echo "::error::npm serves $REMOTE, accepted is $ACCEPTED — refusing to register an unaccepted artefact"; exit 1; }
+          echo "npm serves the accepted artefact: $REMOTE"
+      - name: Install mcp-publisher (pinned version, SHA-256 checked)
+        run: |
+          set -e
+          curl -sSfL -o mp.tgz "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$MCP_PUBLISHER_SHA256  mp.tgz" | sha256sum -c -
+          tar xzf mp.tgz mcp-publisher && ./mcp-publisher --version
+      - name: Register in the official MCP Registry (OIDC)
+        run: |
+          set -e
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
+      - name: Verify the registry lists this version
+        run: sleep 10 && node .github/scripts/registry-lists.mjs "${{ needs.verify.outputs.version }}"

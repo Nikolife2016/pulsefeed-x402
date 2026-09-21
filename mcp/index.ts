@@ -8,7 +8,7 @@ import { safeFetch, SsrfBlocked } from "./ssrfGuard.js";
 
 const BASE = process.env.PULSEFEED_URL || "https://pulsefeed.dev";
 
-const server = new McpServer({ name: "pulsefeed-x402", version: "1.0.8" });
+const server = new McpServer({ name: "pulsefeed-x402", version: "1.1.0" });
 
 const textOf = (j: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(j, null, 2) }] });
 // Ошибка бэкенда обязана стать ОШИБКОЙ инструмента, а не тихими пустыми данными: 21.09.2026 контролёр
@@ -99,9 +99,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const r = await fetch(`${BASE}/`, { signal: AbortSignal.timeout(30_000) });
-    const j = await r.json();
-    return { content: [{ type: "text", text: JSON.stringify(j, null, 2) }] };
+    try { return textOf(await getJson("/")); } catch (e) { return errorOf(e); }
   },
 );
 
@@ -160,10 +158,13 @@ server.registerTool(
       const q = new URLSearchParams({ days: String(days ?? 30) });
       if (packages?.length) q.set("packages", packages.join(","));
       const j = await getJson(`/mcp/drift.json?${q.toString()}`);
-      // `clean` вычисляется ТОЛЬКО из валидного массива событий. Нет массива — нет вердикта.
+      // `clean` вычисляется ТОЛЬКО из валидного массива ВАЛИДНЫХ событий. Нет массива или хоть одно событие
+      // без id/type/at — нет вердикта: контролёр показал, что [null, {}] давал clean на любой пакет.
       if (!Array.isArray(j.events)) throw new BackendError("drift feed has no events array");
+      const bad = j.events.findIndex((e: any) => !e || typeof e !== "object" || typeof e.id !== "string" || typeof e.type !== "string" || typeof e.at !== "string");
+      if (bad >= 0) throw new BackendError(`drift feed event #${bad} is malformed`);
       if (packages?.length) {
-        const seen = new Set(j.events.map((e: any) => e?.id));
+        const seen = new Set(j.events.map((e: any) => e.id));
         j.clean = packages.filter(p => !seen.has(p));
         j.note = "`clean` means no recorded drift in this window. Use mcp_check_server for the package's current standing.";
       }

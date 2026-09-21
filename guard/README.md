@@ -1,6 +1,6 @@
 # pulsefeed-x402-guard
 
-Safety guard for x402 agent payments. Wraps your paying `fetch`: **before every payment** the endpoint is checked against [PulseFeed](https://pulsefeed.dev)'s free `/verify`, and dead, scam or risky endpoints are blocked. Zero dependencies, Node 18+, **ESM and CommonJS**.
+Safety guard for x402 agent payments. Wraps your paying `fetch`: **before every payment** the endpoint is checked against [PulseFeed](https://pulsefeed.dev)'s free `/verify`, and dead, scam or risky endpoints are blocked. Zero dependencies, Node 20+, **ESM and CommonJS**.
 
 ```bash
 npm i pulsefeed-x402-guard
@@ -54,7 +54,7 @@ guardFetch(paying, {
 });
 ```
 
-The payment fetch is **never called** for a blocked endpoint; `PaymentBlockedError.trust` carries the full verdict.
+The payment fetch is **never called** for a blocked endpoint; `PaymentBlockedError.trust` carries the full verdict. A blocking verdict blocks regardless of `known`; `block: ["unknown"]` blocks endpoints PulseFeed has never seen. If PulseFeed itself is unreachable or answers with something that is not a verdict, `verify()` throws `PulseFeedUnavailableError` and `guardFetch` applies `onError` alone (`"allow"` pays, `"block"` throws `PaymentBlockedError` with `reason: "verify-error"`); `block` and `onUnknown` only apply to a healthy PulseFeed answer.
 
 ## How it works
 

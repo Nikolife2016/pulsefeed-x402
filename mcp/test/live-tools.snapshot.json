@@ -1,6 +1,7 @@
 {
-  "takenAt": "2026-09-21T07:09:13.869326Z",
+  "takenAt": "2026-09-21T07:49:12.652946Z",
   "source": "https://pulsefeed.dev/mcp-server tools/list",
+  "note": "Contract for the npm package: names and inputSchemas must equal this (descriptions, $schema and additionalProperties excluded from comparison).",
   "tools": [
     "check_x402_endpoint",
     "mcp_check_server",
@@ -49,10 +50,13 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 200,
           "description": "npm package names to check, e.g. your installed MCP servers. Omit for the whole ecosystem feed."
         },
         "days": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
           "description": "Window in days (default 30)"
         }
       },
@@ -72,7 +76,9 @@
       "type": "object",
       "properties": {
         "days": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
           "description": "Window in days (default 7)"
         }
       },
@@ -92,7 +98,9 @@
       "type": "object",
       "properties": {
         "days": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
           "description": "Look-back window in days (default 30)"
         }
       },

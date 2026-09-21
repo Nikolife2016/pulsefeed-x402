@@ -30,10 +30,9 @@ const mockFetch = async (url) => {
 };
 `;
 
-test("тарбол: четыре файла dist, README и LICENSE, ничего лишнего", () => {
-  const list = execFileSync("tar", ["-tzf", tgz], { encoding: "utf8" }).split("\n").filter(Boolean);
-  for (const f of ["package/dist/index.cjs", "package/dist/index.d.cts", "package/dist/index.js", "package/dist/index.d.ts", "package/README.md", "package/LICENSE", "package/package.json"]) assert.ok(list.includes(f), "нет " + f);
-  assert.ok(!list.some(f => /node_modules|\.env|\.pem|src\//.test(f)), "лишние файлы: " + list.join(","));
+test("тарбол: РОВНО четыре файла dist, README, CHANGELOG, LICENSE и package.json — ничего лишнего", () => {
+  const list = execFileSync("tar", ["-tzf", tgz], { encoding: "utf8" }).split("\n").filter(Boolean).sort();
+  assert.deepEqual(list, ["package/CHANGELOG.md", "package/LICENSE", "package/README.md", "package/dist/index.cjs", "package/dist/index.d.cts", "package/dist/index.d.ts", "package/dist/index.js", "package/package.json"]);
 });
 
 test("CommonJS: require даёт три экспорта, avoid блокируется БЕЗ вызова платёжного fetch, safe проходит", () => {
@@ -53,7 +52,7 @@ const safe = g.guardFetch(paying, { fetchImpl: mockFetch, onDecision: d => decis
   console.log("CJS OK " + decisions.join(","));
 })().catch(e => { console.error(e); process.exit(1); });`);
   const out = run("consumer.cjs");
-  assert.match(out, /CJS OK block:verdict:avoid,allow:ok,allow:unknown/);
+  assert.match(out, /CJS OK block:verdict:avoid,allow:ok,allow:verify-error/);   // недоступный PulseFeed → причина verify-error, не unknown
 });
 
 test("ESM: import даёт те же экспорты; onError=block блокирует при недоступном PulseFeed", () => {
@@ -90,6 +89,40 @@ console.log("FAULTS OK");`);
   assert.match(run("faults.mjs"), /FAULTS OK/);
 });
 
+test("политика: вердикт важнее known; block:[\"unknown\"] и onUnknown:\"block\" блокируют исправный неизвестный; onError решает сам", () => {
+  writeFileSync(join(dir, "policy.mjs"), `
+import { guardFetch, PaymentBlockedError } from "pulsefeed-x402-guard";
+const answer = (body) => async (u) => String(u).includes("verify?endpoint=") ? { ok: true, json: async () => body } : { ok: true, json: async () => ({}) };
+const down = async (u) => { if (String(u).includes("verify?endpoint=")) throw new Error("down"); return { ok: true }; };
+const cases = [
+  // [имя, ответ /verify или "down", опции, ожидание: block|allow, ожидаемая причина]
+  ["known:false+avoid, по умолчанию",        { known: false, verdict: "avoid" },   {},                              "block", "verdict:avoid"],
+  ["known:false+avoid, onUnknown:allow",     { known: false, verdict: "avoid" },   { onUnknown: "allow" },          "block", "verdict:avoid"],
+  ["known:false+caution, block:[caution]",   { known: false, verdict: "caution" }, { block: ["caution"] },          "block", "verdict:caution"],
+  ["known:true+caution, по умолчанию",       { known: true, verdict: "caution" },  {},                              "allow", "ok"],
+  ["known:false+unknown, block:[unknown]",   { known: false, verdict: "unknown" }, { block: ["unknown"] },          "block", "verdict:unknown"],
+  ["known:false+unknown, onUnknown:block",   { known: false, verdict: "unknown" }, { onUnknown: "block" },          "block", "unknown"],
+  ["known:false+unknown, по умолчанию",      { known: false, verdict: "unknown" }, {},                              "allow", "unknown"],
+  ["known:false+safe, onUnknown:block",      { known: false, verdict: "safe" },    { onUnknown: "block" },          "block", "unknown"],
+  ["PulseFeed down, по умолчанию",           "down",                               {},                              "allow", "verify-error"],
+  ["PulseFeed down, onUnknown:block (не про ошибки)", "down",                      { onUnknown: "block" },          "allow", "verify-error"],
+  ["PulseFeed down, block:[unknown] (не про ошибки)", "down",                      { block: ["unknown"] },          "allow", "verify-error"],
+  ["PulseFeed down, onError:block",          "down",                               { onError: "block" },            "block", "verify-error"],
+];
+const failures = [];
+for (const [name, body, opts, want, reason] of cases) {
+  let paid = 0; const decisions = [];
+  const safe = guardFetch(async () => { paid++; return { ok: true }; }, { ...opts, fetchImpl: body === "down" ? down : answer({ endpoint: "x", ...body }), onDecision: d => decisions.push(d) });
+  let got = "allow"; try { await safe("https://ep.example/api"); } catch (e) { got = e instanceof PaymentBlockedError ? "block" : "throw:" + e.message; }
+  const d = decisions[0];
+  if (got !== want || paid !== (want === "allow" ? 1 : 0) || decisions.length !== 1 || d.decision !== want || d.reason !== reason)
+    failures.push(name + ": got=" + got + " paid=" + paid + " decision=" + JSON.stringify(decisions.map(x => [x.decision, x.reason])));
+}
+if (failures.length) { console.error(failures.join("\\n")); process.exit(1); }
+console.log("POLICY OK " + cases.length);`);
+  assert.match(run("policy.mjs"), /POLICY OK 12/);
+});
+
 test("один класс ошибки на оба формата: instanceof через границу require/import", () => {
   writeFileSync(join(dir, "both.mjs"), `${MOCK}
 import { createRequire } from "node:module";
@@ -103,16 +136,16 @@ console.log("IDENTITY OK");`);
   assert.match(run("both.mjs"), /IDENTITY OK/);
 });
 
-test("TypeScript NodeNext: потребители .cts и .mts типизируются (tsc --noEmit)", () => {
+test("TypeScript NodeNext: потребители .cts и .mts типизируются (tsc --noEmit, skipLibCheck:false — наши .d.ts тоже проверяются)", () => {
   writeFileSync(join(dir, "c.cts"), `import { guardFetch, PaymentBlockedError, type TrustVerdict } from "pulsefeed-x402-guard";
 const safe = guardFetch(fetch, { block: ["avoid", "caution"] }); const t: TrustVerdict = { endpoint: "x", known: false, verdict: "unknown" }; const e = new PaymentBlockedError("u", t); export { safe, e };`);
   writeFileSync(join(dir, "m.mts"), `import { verify, type GuardOptions } from "pulsefeed-x402-guard";
 const o: GuardOptions = { onUnknown: "block" }; export const p = verify("https://x.example", { timeoutMs: 100 }); export { o };`);
-  writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmit: true, skipLibCheck: true, target: "ES2022", lib: ["ES2022", "DOM"] }, files: ["c.cts", "m.mts"] }));
+  writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmit: true, skipLibCheck: false, types: [], target: "ES2022", lib: ["ES2022", "DOM"] }, files: ["c.cts", "m.mts"] }));
   execFileSync(join(dir, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.json"], { cwd: dir, encoding: "utf8" });
 });
 
-test("ТОЧНЫЙ пример README с @x402/fetch v2 + ExactEvmScheme: avoid блокируется до запроса; safe проходит 402 → подписанный повтор → 200", () => {
+test("композиция README (@x402/fetch v2 + ExactEvmScheme) с моками: avoid блокируется до запроса и до подписи; safe проходит 402 → одна подпись → 200", () => {
   writeFileSync(join(dir, "readme.mjs"), `
 import { guardFetch, PaymentBlockedError } from "pulsefeed-x402-guard";
 import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
@@ -128,17 +161,54 @@ const mockFetch = async (input, init = {}) => {
   return new Response(JSON.stringify({ paid: true }), { status: 200, headers: { "content-type": "application/json" } });
 };
 // Ровно композиция из README: платёжная обёртка v2 с настоящей EVM-схемой и ключом, поверх неё guard.
-const paying = wrapFetchWithPaymentFromConfig(mockFetch, { schemes: [{ network: "eip155:8453", client: new ExactEvmScheme(privateKeyToAccount(generatePrivateKey())) }] });
+const account = privateKeyToAccount(generatePrivateKey()); let signs = 0;
+const spy = new Proxy(account, { get: (t, k) => k === "signTypedData" ? (...a) => { signs++; return t.signTypedData(...a); } : t[k] });
+const paying = wrapFetchWithPaymentFromConfig(mockFetch, { schemes: [{ network: "eip155:8453", client: new ExactEvmScheme(spy) }] });
 const safe = guardFetch(paying, { fetchImpl: mockFetch });
 let blocked = false; try { await safe("https://scam.example/api"); } catch (e) { blocked = e instanceof PaymentBlockedError; }
 if (!blocked) throw new Error("avoid не заблокирован");
 if (log.some(l => l.url.includes("scam"))) throw new Error("к заблокированному эндпоинту ушёл запрос");
+if (signs !== 0) throw new Error("при блокировке была подпись: " + signs);
 const r = await safe("https://good.example/api"); const j = await r.json();
 const good = log.filter(l => l.url.includes("good"));
 if (r.status !== 200 || !j.paid) throw new Error("safe: ожидался 200 {paid:true}");
 if (!(good.length === 2 && good[0].paid === false && good[1].paid === true)) throw new Error("ожидался цикл 402 → подписанный повтор, получено " + JSON.stringify(good));
-console.log("README EXAMPLE OK");`);
-  assert.match(run("readme.mjs"), /README EXAMPLE OK/);
+if (signs !== 1) throw new Error("ожидалась ровно одна подпись, было " + signs);
+console.log("README COMPOSITION OK signs=" + signs);`);
+  assert.match(run("readme.mjs"), /README COMPOSITION OK signs=1/);
+});
+
+test("ДОСЛОВНЫЙ код из README (первый js-блок, без изменений) исполняется: avoid → warn «blocked», 0 платежей; safe → 402 → подписанный повтор", () => {
+  const readme = readFileSync(join(PKG, "README.md"), "utf8");
+  const m = readme.match(/```js\n(import \{ guardFetch, PaymentBlockedError \}[\s\S]*?)```/);
+  assert.ok(m, "в README нет первого js-блока с guardFetch");
+  const code = m[1];
+  assert.ok(/wrapFetchWithPaymentFromConfig\(fetch,/.test(code) && /guardFetch\(paying\)/.test(code) && /process\.env\.PK/.test(code), "README-блок изменил форму");
+  // Прелюдия подменяет ТОЛЬКО окружение (global fetch, PK, console.warn); код README вставлен как есть.
+  const prelude = `
+import { generatePrivateKey } from "viem/accounts";
+process.env.PK = generatePrivateKey();
+const MODE = process.env.MODE; const log = []; const warns = [];
+const CHALLENGE = { x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "10000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x7f5f784Ba98cEcFC0bA4336f0E48222A3d4d69a8", resource: { url: "https://some-x402-service.example/api" }, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } }] };
+globalThis.fetch = async (input, init = {}) => {
+  const u = String(input?.url ?? input); const h = Object.fromEntries(new Headers(init.headers ?? input?.headers ?? {}).entries());
+  if (u.startsWith("https://pulsefeed.dev/verify?endpoint=")) return new Response(JSON.stringify(MODE === "avoid" ? { endpoint: u, known: true, verdict: "avoid", flags: ["honeypot"] } : { endpoint: u, known: true, verdict: "safe", score: 95 }), { status: 200, headers: { "content-type": "application/json" } });
+  const paid = !!(h["payment-signature"] || h["x-payment"]); log.push({ url: u, paid });
+  if (!paid) return new Response(JSON.stringify(CHALLENGE), { status: 402, headers: { "content-type": "application/json", "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(CHALLENGE)).toString("base64") } });
+  return new Response(JSON.stringify({ paid: true }), { status: 200, headers: { "content-type": "application/json" } });
+};
+console.warn = (...a) => warns.push(a.map(String).join(" "));
+process.on("exit", () => process.stdout.write("RESULT " + JSON.stringify({ log, warns }) + "\\n"));
+`;
+  writeFileSync(join(dir, "readme-literal.mjs"), prelude + code);
+  const parse = out => JSON.parse(out.match(/RESULT (.*)/)[1]);
+  const avoid = parse(execFileSync(process.execPath, ["readme-literal.mjs"], { cwd: dir, encoding: "utf8", timeout: 60_000, env: { ...process.env, MODE: "avoid" } }));
+  assert.deepEqual(avoid.log, [], "при avoid к сервису ушёл запрос: " + JSON.stringify(avoid.log));
+  assert.equal(avoid.warns.length, 1); assert.match(avoid.warns[0], /^blocked: avoid honeypot$/);
+  const safe = parse(execFileSync(process.execPath, ["readme-literal.mjs"], { cwd: dir, encoding: "utf8", timeout: 60_000, env: { ...process.env, MODE: "safe" } }));
+  assert.deepEqual(safe.warns, []);
+  assert.deepEqual(safe.log.map(l => l.paid), [false, true], "ожидался 402 → подписанный повтор: " + JSON.stringify(safe.log));
+  assert.ok(safe.log.every(l => l.url === "https://some-x402-service.example/api"));
 });
 
 test("отрицательный контроль: README не ссылается на deprecated x402-fetch v1", () => {

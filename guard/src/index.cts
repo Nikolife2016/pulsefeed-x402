@@ -127,22 +127,26 @@ export function guardFetch(innerFetch: FetchLike, opts: GuardOptions = {}): Fetc
     try {
       trust = await verify(url, { apiUrl: opts.apiUrl, timeoutMs: opts.timeoutMs, fetchImpl: opts.fetchImpl });
     } catch (e) {
+      // Неисправность проверки решается ТОЛЬКО политикой onError: "allow" — платёж идёт (fail-open),
+      // "block" — не идёт. onUnknown и block здесь не участвуют: они про исправный ответ PulseFeed.
       trust = { endpoint: url, known: false, verdict: "unknown", advice: `PulseFeed unavailable: ${e instanceof Error ? e.message : String(e)}` };
-      if (onError === "block") {
-        const d: GuardDecision = { url, decision: "block", reason: "verify-error", trust };
-        opts.onDecision?.(d);
-        throw new PaymentBlockedError(url, trust);
-      }
+      const d: GuardDecision = { url, decision: onError === "block" ? "block" : "allow", reason: "verify-error", trust };
+      opts.onDecision?.(d);
+      if (d.decision === "block") throw new PaymentBlockedError(url, trust);
+      return innerFetch(input, init);
     }
 
+    // Сначала вердикт, потом «известность»: блокирующий вердикт блокирует независимо от known
+    // (контролёр показал, что {known:false, verdict:"avoid"} проходил через onUnknown="allow"),
+    // а block:["unknown"] действует и на корректный неизвестный эндпоинт.
     let decision: "allow" | "block" = "allow";
     let reason = "ok";
-    if (!trust.known) {
-      decision = onUnknown === "block" ? "block" : "allow";
-      reason = "unknown";
-    } else if (block.has(trust.verdict)) {
+    if (block.has(trust.verdict)) {
       decision = "block";
       reason = `verdict:${trust.verdict}`;
+    } else if (!trust.known) {
+      decision = onUnknown === "block" ? "block" : "allow";
+      reason = "unknown";
     }
 
     opts.onDecision?.({ url, decision, reason, trust });
