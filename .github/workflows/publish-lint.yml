@@ -1,0 +1,20 @@
+# Публикация x402-payable (lint/) — отдельно от MCP, только вручную. Перенесено из publish-mcp.yml
+# 21.09.2026: один запуск — один пакет. Пока доверенный издатель не настроен, шаг падает и это видно.
+name: Publish x402-payable (manual)
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24", registry-url: "https://registry.npmjs.org" }
+      - run: npm install -g npm@11.7.0
+      - working-directory: lint
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "x402-payable@$V" version >/dev/null 2>&1; then echo "x402-payable@$V already on npm — skip"; else npm publish --access public --provenance; fi

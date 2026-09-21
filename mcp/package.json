@@ -30,9 +30,10 @@
     "usdc"
   ],
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc",
-    "prepare": "tsc",
-    "start": "node --import tsx index.ts"
+    "prepack": "npm run clean && npm run build",
+    "test": "node --test test/tools.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -52,5 +53,9 @@
   "bugs": {
     "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues"
   },
-  "mcpName": "io.github.Nikolife2016/pulsefeed-x402"
+  "mcpName": "io.github.Nikolife2016/pulsefeed-x402",
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
 }

@@ -1,0 +1,112 @@
+{
+  "takenAt": "2026-09-21T07:09:13.869326Z",
+  "source": "https://pulsefeed.dev/mcp-server tools/list",
+  "tools": [
+    "check_x402_endpoint",
+    "mcp_check_server",
+    "mcp_drift_check",
+    "mcp_security_report",
+    "pulsefeed_products",
+    "x402_changes",
+    "x402_data_sample",
+    "x402_ecosystem_stats",
+    "x402_incidents",
+    "x402_leaderboard",
+    "x402_working_services"
+  ],
+  "inputSchemas": {
+    "check_x402_endpoint": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The x402 endpoint URL to verify"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "mcp_check_server": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "npm package name of the MCP server, e.g. @scope/name"
+        }
+      },
+      "required": [
+        "package"
+      ],
+      "additionalProperties": false
+    },
+    "mcp_drift_check": {
+      "type": "object",
+      "properties": {
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "npm package names to check, e.g. your installed MCP servers. Omit for the whole ecosystem feed."
+        },
+        "days": {
+          "type": "number",
+          "description": "Window in days (default 30)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mcp_security_report": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "pulsefeed_products": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "x402_changes": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "number",
+          "description": "Window in days (default 7)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "x402_data_sample": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "x402_ecosystem_stats": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "x402_incidents": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "number",
+          "description": "Look-back window in days (default 30)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "x402_leaderboard": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "x402_working_services": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  }
+}

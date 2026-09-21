@@ -133,6 +133,33 @@ server.registerTool(
 );
 
 server.registerTool(
+  "mcp_drift_check",
+  {
+    title: "Has an MCP package changed since you trusted it?",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description:
+      "The rug pull check. `mcp_check_server` answers whether a package is safe TODAY; this answers what CHANGED after it was adopted: an install script added in a later version (arbitrary code on `npm i` that was not there at review time), package ownership swapped, repository removed, package unpublished, build provenance lost. Pass your own dependency list to check it in one call. Derived from a daily external re-audit of the whole MCP package population — an event exists only because a snapshot from before it exists. Free.",
+    inputSchema: {
+      packages: z.array(z.string()).max(200).optional().describe("npm package names to check, e.g. your installed MCP servers. Omit for the whole ecosystem feed."),
+      days: z.number().int().min(1).max(365).optional().describe("Window in days (default 30)"),
+    },
+  },
+  async ({ packages, days }) => {
+    const q = new URLSearchParams({ days: String(days ?? 30) });
+    if (packages?.length) q.set("packages", packages.join(","));
+    const j: any = await getJson(`/mcp/drift.json?${q.toString()}`);
+    if (packages?.length) {
+      // Живой сервер отдаёт события по списку и поле requested; `clean` считаем здесь, чтобы
+      // ответ читался без второго вызова: пакет чист = ни одного события в окне.
+      const seen = new Set((j.events ?? []).map((e: any) => e.id));
+      j.clean = packages.filter(p => !seen.has(p));
+      j.note = "`clean` means no recorded drift in this window. Use mcp_check_server for the package's current standing.";
+    }
+    return textOf(j);
+  },
+);
+
+server.registerTool(
   "mcp_security_report",
   { title: "State of MCP security",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },

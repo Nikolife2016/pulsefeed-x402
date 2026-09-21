@@ -1,84 +1,167 @@
-# Публикация: npm-пакеты + официальный MCP Registry.
+# Публикация npm-пакетов и регистрация в официальном MCP Registry.
 #
-# АУТЕНТИФИКАЦИЯ В NPM — OIDC (Trusted Publishing), токен не нужен. Причина не в удобстве:
-# гранулярный NPM_TOKEN истекает 28.10.2026, а с января 2027 токены вообще теряют право
-# публикации. OIDC снимает обе даты сразу и не требует хранить секрет.
-# Требования npm: CLI >= 11.5.1, Node >= 22.14, permissions.id-token: write, и настроенный
-# на npmjs.com доверенный издатель для КАЖДОГО пакета (репозиторий + имя этого файла).
+# ИСТОРИЯ, ради которой этот файл устроен так, а не проще. 06.08.2026 в npm ушла версия
+# pulsefeed-x402-mcp с тремя инструментами из одиннадцати: исходник был урезан, и ничто перед
+# публикацией не проверяло, что поставляется. Поэтому:
+#   • собираем ОДИН раз, тестируем ИМЕННО тарбол (установка в чистый каталог без dev-зависимостей
+#     и без lifecycle-скриптов, запуск bin по stdio, набор инструментов против датированного снимка),
+#     публикуем ТОТ ЖЕ файл и сверяем его digest с тем, что отдаёт npm;
+#   • публикация идёт сначала под dist-tag `next`, `latest` двигается только после того, как
+#     пакет, скачанный ИЗ npm, прошёл ту же приёмку;
+#   • любой провал сборки, теста, несовпадение тега с версией или мусор в git останавливают релиз;
+#   • ручной запуск проходит те же проверки, что и тег — обхода нет.
 #
-# ⚠️ Первую версию НОВОГО пакета через OIDC опубликовать нельзя — доверенный издатель
-# настраивается только у существующего пакета (защита от захвата имён, npm/cli#8544).
-# Бутстрап делается один раз вручную, дальше всё идёт по OIDC.
+# АУТЕНТИФИКАЦИЯ В NPM — OIDC (Trusted Publishing), токен не нужен: гранулярный NPM_TOKEN истекает
+# 28.10.2026, а с января 2027 токены теряют право публикации. Доверенный издатель настраивается на
+# npmjs.com для КАЖДОГО пакета (репозиторий + имя этого файла). Первую версию нового пакета через
+# OIDC опубликовать нельзя (npm/cli#8544) — бутстрап вручную, один раз.
 #
-# Триггеры: тег v* ИЛИ ручной запуск (workflow_dispatch).
+# Триггеры: тег `mcp-v<version>` (совпадение с mcp/package.json проверяется) или ручной запуск
+# с явным выбором пакета. Один запуск — один пакет.
 name: Publish MCP (npm + official registry)
 on:
   push:
-    tags: ["v*"]
+    tags: ["mcp-v*"]
   workflow_dispatch:
+    inputs:
+      package:
+        description: "Какой пакет публиковать"
+        required: true
+        type: choice
+        options: [mcp]
+      confirm:
+        description: "Введите точную версию из package.json, чтобы подтвердить публикацию"
+        required: true
+        type: string
+concurrency:
+  group: publish-${{ github.event.inputs.package || 'mcp' }}
+  cancel-in-progress: false
 permissions:
-  id-token: write   # OIDC для mcp-publisher login github-oidc
   contents: read
+
 jobs:
-  publish:
+  verify:
+    name: verify (build once, test the tarball)
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tgz: ${{ steps.meta.outputs.tgz }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"          # OIDC требует Node >= 22.14
-          registry-url: "https://registry.npmjs.org"
-      - name: Ensure npm supports trusted publishing
+          node-version: "24"
+      - name: Guard against build artefacts tracked in git
         run: |
-          # ЗАКРЕПЛЁННАЯ версия, а не @latest. Этот шаг стоит в задании с правом id-token:
-          # write, то есть с возможностью опубликовать пакет от нашего имени. Тянуть в него
-          # свежайший npm означает исполнять здесь код, который мы не выбирали и не видели.
-          npm install -g npm@11.7.0   # OIDC требует npm CLI >= 11.5.1
-          npm --version
-      - name: Publish npm package (mcp, skip if version exists)
+          set -e
+          if git ls-files | grep -E '(^|/)(node_modules|dist)(/|$)'; then
+            echo "::error::node_modules or dist is tracked in git — this is how 06.08.2026 happened. Untrack them."; exit 1
+          fi
+          echo "git tree clean of artefacts"
+      - name: Version must match the tag / the confirmation
+        id: meta
+        run: |
+          set -e
+          V=$(node -p "require('./mcp/package.json').version")
+          if [ "${{ github.event_name }}" = "push" ]; then
+            T="${GITHUB_REF_NAME#mcp-v}"
+            [ "$T" = "$V" ] || { echo "::error::tag mcp-v$T does not match mcp/package.json $V"; exit 1; }
+          else
+            [ "${{ github.event.inputs.confirm }}" = "$V" ] || { echo "::error::confirmation '${{ github.event.inputs.confirm }}' does not match mcp/package.json $V"; exit 1; }
+          fi
+          if npm view "pulsefeed-x402-mcp@$V" version >/dev/null 2>&1; then echo "::error::pulsefeed-x402-mcp@$V already exists on npm — bump the version"; exit 1; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tgz=pulsefeed-x402-mcp-$V.tgz" >> "$GITHUB_OUTPUT"
+      - name: Install (lockfile, dev included) and build once
         working-directory: mcp
         run: |
-          V=$(node -p "require('./package.json').version")
-          if npm view "pulsefeed-x402-mcp@$V" version >/dev/null 2>&1; then
-            echo "pulsefeed-x402-mcp@$V already on npm — skip publish"
-          else
-            npm ci || npm install
-            npm publish
-          fi
-      - name: Publish x402-payable (skip if version exists)
-        # Пока доверенный издатель для x402-payable не настроен, шаг падает и это ВИДНО.
-        # Убирать шум через continue-on-error нельзя: молча провалившаяся публикация —
-        # ровно тот класс «сторож без датчика», что уже ловили сегодня на watchdog.
-        continue-on-error: ${{ vars.LINT_BOOTSTRAPPED != 'true' }}
-        working-directory: lint
+          set -e
+          npm ci --include=dev
+          npm run clean
+          npm run build
+          test -f dist/index.js && test -f dist/ssrfGuard.js
+      - name: Pack the artefact that will be published
+        working-directory: mcp
         run: |
-          V=$(node -p "require('./package.json').version")
-          if npm view "x402-payable@$V" version >/dev/null 2>&1; then
-            echo "x402-payable@$V already on npm — skip publish"
-          else
-            npm publish --access public
-          fi
+          set -e
+          npm pack --json --ignore-scripts > pack.json     # dist уже собран; prepack не запускаем повторно
+          node -e 'const p=require("./pack.json")[0]; console.log("files:",p.entryCount,"size:",p.size,"integrity:",p.integrity); require("fs").writeFileSync("integrity.txt",p.integrity)'
+          tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -E "node_modules|\.env|\.pem" && { echo "::error::tarball carries files it must not"; exit 1; } || true
+          tar -tzf "${{ steps.meta.outputs.tgz }}" | grep -q "package/dist/index.js" || { echo "::error::tarball lacks dist/index.js"; exit 1; }
+      - name: Acceptance test against the tarball (installed as a consumer would)
+        working-directory: mcp
+        env:
+          PKG_TGZ: ${{ github.workspace }}/mcp/${{ steps.meta.outputs.tgz }}
+        run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-tarball
+          path: |
+            mcp/${{ steps.meta.outputs.tgz }}
+            mcp/integrity.txt
+          if-no-files-found: error
+          retention-days: 30
 
+  publish:
+    name: publish the verified tarball
+    needs: verify
+    if: github.event_name == 'push' || github.event.inputs.package == 'mcp'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC: npm trusted publishing + mcp-publisher github-oidc
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          name: mcp-tarball
+          path: artefact
+      - name: Ensure npm supports trusted publishing (pinned)
+        run: npm install -g npm@11.7.0 && npm --version
+      - name: Publish the same tarball under dist-tag `next`
+        env:
+          V: ${{ needs.verify.outputs.version }}
+          TGZ: artefact/${{ needs.verify.outputs.tgz }}
+        run: |
+          set -e
+          npm publish "$TGZ" --tag next --provenance --access public
+          sleep 20
+          REMOTE=$(npm view "pulsefeed-x402-mcp@$V" dist.integrity)
+          LOCAL=$(cat artefact/integrity.txt)
+          [ "$REMOTE" = "$LOCAL" ] || { echo "::error::integrity mismatch: npm=$REMOTE local=$LOCAL"; exit 1; }
+          echo "npm serves the exact tarball we tested: $REMOTE"
+      - name: Re-run acceptance against the package as npm serves it
+        working-directory: mcp
+        env:
+          V: ${{ needs.verify.outputs.version }}
+        run: |
+          set -e
+          npm ci --include=dev --ignore-scripts
+          npm pack "pulsefeed-x402-mcp@$V" --silent
+          PKG_TGZ="$PWD/pulsefeed-x402-mcp-$V.tgz" npm test
+      - name: Promote to latest
+        env:
+          V: ${{ needs.verify.outputs.version }}
+        run: npm dist-tag add "pulsefeed-x402-mcp@$V" latest && npm view pulsefeed-x402-mcp dist-tags --json
       - name: Install mcp-publisher
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
-      # server.json дублирует версию пакета, и она разъезжается: 06.08.2026 npm ушёл на 1.0.7,
-      # а здесь осталась 1.0.6 — каталог отверг публикацию, потому что такая версия там уже
-      # есть. Синхронизируем перед отправкой, чтобы источник версии был один — package.json.
-      - name: Sync server.json version with the package
+      - name: Sync server.json with the published version
+        env:
+          V: ${{ needs.verify.outputs.version }}
         run: |
-          V=$(node -p "require('./mcp/package.json').version")
           node -e '
-            const fs = require("fs");
-            const v = process.argv[1];
+            const fs = require("fs"); const v = process.env.V;
             const s = JSON.parse(fs.readFileSync("server.json", "utf8"));
             s.version = v;
             for (const p of s.packages ?? []) if (p.identifier === "pulsefeed-x402-mcp") p.version = v;
             fs.writeFileSync("server.json", JSON.stringify(s, null, 2) + "\n");
-            console.log("server.json →", v);
-          ' "$V"
-
-      - name: Publish to official MCP Registry (OIDC)
+            console.log("server.json →", v);'
+      - name: Register in the official MCP Registry (OIDC)
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
