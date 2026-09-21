@@ -102,7 +102,10 @@ export async function verifyX402Endpoint(endpoint: string, opts?: PulsefeedOptio
 export async function x402TrustCatalog(opts?: PulsefeedOptions): Promise<any> {
   const api = (opts?.apiUrl ?? DEFAULT_API).replace(/\/$/, "");
   const j = await getJson(`${api}/status.json`, opts);
-  if (!("topHealthy" in j) && !("ecosystem" in j)) throw new PulseFeedUnavailableError("PulseFeed status.json has an unexpected shape");
+  // Форма проверяется, а не наличие ключа: {"topHealthy":"garbage"} или {"ecosystem":null} — не каталог.
+  if (!Array.isArray(j.topHealthy) || !j.ecosystem || typeof j.ecosystem !== "object" || Array.isArray(j.ecosystem)) {
+    throw new PulseFeedUnavailableError("PulseFeed status.json has an unexpected shape");
+  }
   return {
     ecosystem: j.ecosystem,
     catalogAudit: j.catalogAudit,

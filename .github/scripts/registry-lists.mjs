@@ -22,10 +22,12 @@ if (s.version !== v) problems.push(`server version is ${s.version}`);
 if (!pkg) problems.push(`no package ${PKG}`);
 else {
   if (pkg.version !== v) problems.push(`${PKG} version is ${pkg.version}`);
-  if ((pkg.registryType ?? "npm") !== "npm") problems.push(`registryType is ${pkg.registryType}`);
+  if (pkg.registryType !== "npm") problems.push(`registryType is ${JSON.stringify(pkg.registryType)}, expected "npm"`);
   if (pkg.transport?.type !== "stdio") problems.push(`transport is ${JSON.stringify(pkg.transport)}`);
 }
-if (meta.status && meta.status !== "active") problems.push(`status is ${meta.status}`);
-if (meta.isLatest === false) problems.push("registry does not consider this version latest");
+// Отсутствие признака — не успех: status и isLatest обязаны быть ИМЕННО active / true (контролёр показал,
+// что ответ без _meta проходил как зелёный).
+if (meta.status !== "active") problems.push(`status is ${JSON.stringify(meta.status)}, expected "active"`);
+if (meta.isLatest !== true) problems.push(`isLatest is ${JSON.stringify(meta.isLatest)}, expected true`);
 if (problems.length) { console.error(`::error::registry entry for ${SERVER}@${v} is wrong: ${problems.join("; ")}`); process.exit(1); }
 console.log(`registry lists ${s.name}@${s.version} with npm ${PKG}@${pkg.version} stdio, status ${meta.status ?? "?"}, latest=${meta.isLatest ?? "?"}, published ${meta.publishedAt ?? "?"}`);

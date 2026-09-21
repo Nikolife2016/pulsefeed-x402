@@ -66,19 +66,24 @@ console.log("ESM OK");`);
   assert.match(run("consumer.mjs"), /ESM OK/);
 });
 
-test("неисправности PulseFeed (503, не-JSON, чужая форма, таймаут) → onError; при block платёж не вызывается", () => {
+test("неисправности PulseFeed (503, не-JSON, чужая форма, таймаут, сетевой TypeError, AbortError) → ОДИН класс PulseFeedUnavailableError → onError; при block платёж не вызывается", () => {
   writeFileSync(join(dir, "faults.mjs"), `
 import { guardFetch, verify, PaymentBlockedError, PulseFeedUnavailableError } from "pulsefeed-x402-guard";
 const faults = {
   http503: async () => ({ ok: false, status: 503, json: async () => ({ error: "unavailable" }) }),
   badJson: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad json"); } }),
   wrongShape: async () => ({ ok: true, status: 200, json: async () => ({ hello: "world" }) }),
-  timeout: (u, init) => new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(new Error("aborted")))),
+  timeout: (u, init) => new Promise((_, rej) => init.signal.addEventListener("abort", () => { const e = new Error("aborted"); e.name = "AbortError"; rej(e); })),
+  hang: (u, init) => new Promise(() => {}),                                   // fetch, который не реагирует даже на abort
+  network: async () => { throw new TypeError("fetch failed"); },              // undici: DNS/refused
+  abortName: async () => { const e = new Error("The operation was aborted"); e.name = "AbortError"; throw e; },
 };
+const expectMsg = { http503: /HTTP 503/, badJson: /non-JSON/, wrongShape: /unexpected body/, timeout: /timed out after 50 ms/, hang: /timed out after 50 ms/, network: /request failed: fetch failed/, abortName: /timed out/ };
 for (const [name, f] of Object.entries(faults)) {
   let threw = null; try { await verify("https://x.example/api", { fetchImpl: f, timeoutMs: 50 }); } catch (e) { threw = e; }
   if (!threw) throw new Error(name + ": verify не бросил исключение");
-  if (name !== "timeout" && !(threw instanceof PulseFeedUnavailableError)) throw new Error(name + ": не PulseFeedUnavailableError: " + threw);
+  if (!(threw instanceof PulseFeedUnavailableError) || threw.name !== "PulseFeedUnavailableError") throw new Error(name + ": не PulseFeedUnavailableError: " + threw);
+  if (!expectMsg[name].test(threw.message)) throw new Error(name + ": неожиданное сообщение: " + threw.message);
   let paid = 0; const safeBlock = guardFetch(async () => { paid++; return { ok: true }; }, { fetchImpl: f, timeoutMs: 50, onError: "block" });
   let blocked = false; try { await safeBlock("https://x.example/api"); } catch (e) { blocked = e instanceof PaymentBlockedError; }
   if (!blocked || paid !== 0) throw new Error(name + ": onError=block не заблокировал (blocked=" + blocked + ", paid=" + paid + ")");

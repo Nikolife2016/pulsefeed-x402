@@ -16,10 +16,17 @@ const verifyInput = z.object({
 });
 const catalogInput = z.object({});
 
-export interface PulsefeedVercelTools {
-  verifyX402Endpoint: { description: string; parameters: typeof verifyInput; inputSchema: typeof verifyInput; execute: (input: { endpoint: string }) => Promise<VerifyResult> };
-  x402TrustCatalog: { description: string; parameters: typeof catalogInput; inputSchema: typeof catalogInput; execute: () => Promise<any> };
-}
+/** One tool object as both ai 3/4 (`parameters`) and ai 5+ (`inputSchema`) read it. */
+export type PulsefeedVercelTool<I, O> = { description: string; parameters: I; inputSchema: I; execute: (input: any) => Promise<O> };
+/**
+ * A type alias (not an interface): `generateText({ tools })` expects a `ToolSet` = `Record<string, Tool>`, and only
+ * object type literals get the implicit index signature that makes them assignable to a Record (found by the
+ * controller 21.09.2026: with an interface the README example failed with TS2322 on ai 4 and ai 7).
+ */
+export type PulsefeedVercelTools = {
+  verifyX402Endpoint: PulsefeedVercelTool<typeof verifyInput, VerifyResult>;
+  x402TrustCatalog: PulsefeedVercelTool<typeof catalogInput, any>;
+};
 
 /** PulseFeed tools for the Vercel AI SDK. With options (own apiUrl / timeout) — createPulsefeedTools. */
 export function createPulsefeedTools(opts?: PulsefeedOptions): PulsefeedVercelTools {
@@ -28,7 +35,7 @@ export function createPulsefeedTools(opts?: PulsefeedOptions): PulsefeedVercelTo
       description: TOOL_DESCRIPTIONS.verify,
       parameters: verifyInput,
       inputSchema: verifyInput,
-      execute: async ({ endpoint }) => verifyX402Endpoint(endpoint, opts),
+      execute: async ({ endpoint }: { endpoint: string }) => verifyX402Endpoint(endpoint, opts),
     },
     x402TrustCatalog: {
       description: TOOL_DESCRIPTIONS.catalog,

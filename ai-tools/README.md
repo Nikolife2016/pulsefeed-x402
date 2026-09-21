@@ -21,17 +21,19 @@ npm i @langchain/core    # for the LangChain adapter
 ## Vercel AI SDK
 
 ```ts
-import { generateText } from "ai";
+import { generateText, stepCountIs } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { pulsefeedTools } from "pulsefeed-x402-ai-tools/vercel";
 
 await generateText({
   model: openai("gpt-4o"),
   tools: pulsefeedTools,
-  maxSteps: 5,
+  stopWhen: stepCountIs(5),          // ai 5+; on ai 3/4 use `maxSteps: 5`
   prompt: "I want to pay https://api.some-x402-service.com/data — is it safe first?",
 });
 ```
+
+Works on `ai` 3–7: the tools carry both `parameters` (ai 3/4) and `inputSchema` (ai 5+).
 
 ## LangChain
 

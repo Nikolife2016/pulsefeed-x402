@@ -1,7 +1,7 @@
 {
   "takenAt": "2026-09-21T07:49:12.652946Z",
   "source": "https://pulsefeed.dev/mcp-server tools/list",
-  "note": "Contract for the npm package: names and inputSchemas must equal this (descriptions, $schema and additionalProperties excluded from comparison).",
+  "note": "Contract for the npm package: names and inputSchemas must equal this in full (types, bounds, items, required, additionalProperties); only $schema and property descriptions are excluded from comparison.",
   "tools": [
     "check_x402_endpoint",
     "mcp_check_server",

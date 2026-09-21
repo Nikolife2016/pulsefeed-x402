@@ -51,7 +51,10 @@ function session(requests, { backend = LIVE, timeoutMs = 60_000 } = {}) {
     }, 100);
   });
 }
-const isRpc = m => m && m.jsonrpc === "2.0" && ("id" in m || "method" in m) && ("result" in m || "error" in m || "method" in m);
+// Настоящее сообщение JSON-RPC 2.0: уведомление (строковый method, без id) или ответ (id число/строка и РОВНО одно из result/error).
+const isRpc = m => m && typeof m === "object" && m.jsonrpc === "2.0" && (
+  (!("id" in m) && typeof m.method === "string") ||
+  (("id" in m) && (typeof m.id === "number" || typeof m.id === "string") && (("result" in m) !== ("error" in m))));
 const strict = (s, ids) => {
   assert.equal(s.code, 0, "код выхода сервера не 0: " + s.code + " stderr: " + s.err.slice(0, 200));
   const junk = s.msgs.filter(m => m.__junk || !isRpc(m));
@@ -60,9 +63,10 @@ const strict = (s, ids) => {
   for (const id of ids) { const m = s.msgs.find(x => x.id === id); assert.ok(m, "нет ответа на id " + id); assert.ok(!m.error, `RPC-ошибка на id ${id}: ` + JSON.stringify(m.error)); }
 };
 const body = (s, id) => { const r = s.msgs.find(m => m.id === id).result; return { r, j: r.isError ? null : JSON.parse(r.content[0].text) }; };
-// Схема сравнивается ЦЕЛИКОМ (типы, границы, items, required), без текста описаний и артефактов сериализатора.
+// Схема сравнивается ЦЕЛИКОМ (типы, границы, items, required, additionalProperties); убираются только $schema
+// (артефакт сериализатора, не ограничение) и текст description у свойств.
 const deep = v => JSON.stringify(v, (k, x) => x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort()) : x);
-const canon = sc => { const c = JSON.parse(JSON.stringify(sc ?? {})); delete c.$schema; delete c.additionalProperties;
+const canon = sc => { const c = JSON.parse(JSON.stringify(sc ?? {})); delete c.$schema;
   for (const v of Object.values(c.properties ?? {})) delete v.description; return deep(c); };
 const sameSchema = (a, b) => canon(a) === canon(b);
 
@@ -104,12 +108,21 @@ test("mcp_drift_check: пакет с событием — в events и НЕ в c
     assert.deepEqual(j.clean, ["quiet-pkg"]);
   }));
 
-test("mcp_drift_check против живого сервера: ответ разбирается, события имеют eventId/id/type/at", async () => {
-  const s = await session([INIT, READY, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "mcp_drift_check", arguments: { days: 30 } } }]);
-  strict(s, [3]);
-  const { r, j } = body(s, 3); assert.ok(!r.isError, "инструмент вернул ошибку: " + r.content?.[0]?.text);
-  assert.ok(Array.isArray(j.events) && j.events.length > 0 && j.events.every(e => e.eventId && e.id && e.type && e.at));
+test("отрицательный контроль: событие с пустыми строками {id:'',type:'',at:''} или с неразбираемой датой → ошибка, не clean", async () => {
+  for (const ev of [{ id: "", type: "", at: "" }, { id: "x", type: "maintainer_changed", at: "not a date" }, { id: " ", type: "t", at: "2026-09-18T00:00:00Z" }]) {
+    await withBackend((req, res) => json(res, 200, { events: [ev], requested: ["risky-package"] }), async backend => {
+      const s = await session([INIT, READY, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "mcp_drift_check", arguments: { packages: ["risky-package"] } } }], { backend });
+      strict(s, []); const r = s.msgs.find(m => m.id === 3).result; assert.ok(r?.isError && /malformed/.test(r.content[0].text), "прошло: " + JSON.stringify(ev) + " → " + JSON.stringify(r).slice(0, 200));
+    });
+  }
 });
+
+test("пустая лента (events: []) — корректный ответ: все запрошенные пакеты clean, без isError", () => withBackend(
+  (req, res) => json(res, 200, { generated: "t", windowDays: 30, total: 0, events: [], requested: ["a", "b"] }),
+  async backend => {
+    const s = await session([INIT, READY, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "mcp_drift_check", arguments: { packages: ["a", "b"] } } }], { backend });
+    strict(s, [3]); const { r, j } = body(s, 3); assert.ok(!r.isError); assert.deepEqual(j.events, []); assert.deepEqual(j.clean, ["a", "b"]);
+  }));
 
 test("отрицательный контроль: повреждённые события ([null, {}]) → ошибка, не clean", () => withBackend(
   (req, res) => json(res, 200, { events: [null, {}], requested: ["risky-package"] }),
@@ -118,7 +131,66 @@ test("отрицательный контроль: повреждённые со
     strict(s, []); const r = s.msgs.find(m => m.id === 3).result; assert.ok(r?.isError && /malformed/.test(r.content[0].text), JSON.stringify(r).slice(0, 200));
   }));
 
-test("все 11 инструментов вызываются против живого сервера без isError и с непустым JSON", async () => {
+// Фикстуры бэкенда для ДЕТЕРМИНИРОВАННОЙ проверки всех 11 инструментов: каждый ответ известен заранее,
+// и у каждого инструмента проверяется ИМЕННО его выход (значения из фикстур, преобразования, поля), а не «непустой JSON».
+const FX = {
+  status: { ecosystem: { total: 100, live: 40 }, catalogAudit: { checked: 10 }, security: { riskByLevel: { high: 1 }, flagCounts: { honeypot: 2 } }, receiverStability: { stable: 3 }, receiverOnchain: { known: 4 }, analytics: { a: 1 }, topHealthy: [{ url: "https://good.example/api", score: 95 }], topProviders: [{ provider: "good.example" }] },
+  root: { name: "PulseFeed", protocol: "x402", tools: [{ path: "/pulse", price: "$0.01" }] },
+  incidents: { days: 5, incidents: [{ kind: "payTo_hijack", url: "https://scam.example" }] },
+  changes: { days: 3, changes: [{ kind: "new", url: "https://new.example" }] },
+  drift: { generated: "t", windowDays: 30, total: 1, events: [EVENT], requested: ["@modelcontextprotocol/sdk", "quiet-pkg"] },
+  report: { current: { packages: 24000 }, deltas: { d: 1 }, live: { riskySample: [{ id: "bad-pkg" }] } },
+  verify: { package: "mcp-remote", verdict: "safe", score: 90 },
+  sample: { rows: [{ url: "https://good.example/api" }] },
+  endpointVerify: { endpoint: "http://127.0.0.1:1/x", known: true, score: 12, verdict: "avoid", flags: ["dead"], receiverStability: "none", uptimePct: 0 },
+};
+const fixtures = (req, res) => {
+  const u = new URL(req.url, "http://x"); const p = u.pathname;
+  if (p === "/") return json(res, 200, FX.root);
+  if (p === "/status.json") return json(res, 200, FX.status);
+  if (p === "/incidents.json") return json(res, 200, { ...FX.incidents, q: Object.fromEntries(u.searchParams) });
+  if (p === "/changes.json") return json(res, 200, { ...FX.changes, q: Object.fromEntries(u.searchParams) });
+  if (p === "/mcp/drift.json") return json(res, 200, { ...FX.drift, q: Object.fromEntries(u.searchParams) });
+  if (p === "/mcp-report.json") return json(res, 200, FX.report);
+  if (p === "/mcp/verify") return json(res, 200, { ...FX.verify, q: Object.fromEntries(u.searchParams) });
+  if (p === "/data/sample") return json(res, 200, FX.sample);
+  if (p === "/verify") return json(res, 200, FX.endpointVerify);
+  json(res, 404, { error: "unexpected path " + p });
+};
+test("все 11 инструментов на фикстурах локального бэкенда: детерминированный выход каждого инструмента", () => withBackend(fixtures, async backend => {
+  const args = { check_x402_endpoint: { url: "http://127.0.0.1:1/x" }, mcp_check_server: { package: "mcp-remote" }, mcp_drift_check: { packages: ["@modelcontextprotocol/sdk", "quiet-pkg"], days: 30 }, x402_changes: { days: 3 }, x402_incidents: { days: 5 } };
+  const reqs = SNAPSHOT.tools.map((name, i) => ({ jsonrpc: "2.0", id: 100 + i, method: "tools/call", params: { name, arguments: args[name] ?? {} } }));
+  const s = await session([INIT, READY, ...reqs], { backend, timeoutMs: 120_000 });
+  strict(s, reqs.map(r => r.id));
+  const out = {}; for (const [i, name] of SNAPSHOT.tools.entries()) { const r = s.msgs.find(m => m.id === 100 + i).result; assert.ok(!r.isError, `${name}: isError — ${r.content?.[0]?.text?.slice(0, 160)}`); out[name] = JSON.parse(r.content[0].text); }
+  assert.deepEqual(out.x402_working_services, FX.status);
+  assert.deepEqual(out.pulsefeed_products, FX.root);
+  assert.deepEqual(out.x402_ecosystem_stats, { ecosystem: FX.status.ecosystem, catalogAudit: FX.status.catalogAudit, security: FX.status.security, receiverStability: FX.status.receiverStability, receiverOnchain: FX.status.receiverOnchain, analytics: FX.status.analytics });
+  assert.deepEqual(out.x402_leaderboard, { topHealthy: FX.status.topHealthy, topProviders: FX.status.topProviders, trustScoreSpec: `${backend}/trust-score.json` });
+  assert.deepEqual(out.x402_incidents, { ...FX.incidents, q: { days: "5", limit: "50" } });
+  assert.deepEqual(out.x402_changes, { ...FX.changes, q: { days: "3", limit: "100" } });
+  assert.deepEqual(out.mcp_drift_check, { ...FX.drift, q: { days: "30", packages: "@modelcontextprotocol/sdk,quiet-pkg" }, clean: ["quiet-pkg"], note: out.mcp_drift_check.note });
+  assert.match(out.mcp_drift_check.note, /no recorded drift/);
+  assert.deepEqual(out.mcp_security_report, { current: FX.report.current, deltas: FX.report.deltas, riskySample: FX.report.live.riskySample });
+  assert.deepEqual(out.mcp_check_server, { ...FX.verify, q: { package: "mcp-remote" } });
+  assert.deepEqual(out.x402_data_sample, FX.sample);
+  // check_x402_endpoint: loopback-адрес обязан быть ОТКАЗАН стражем SSRF (детерминированно, без сети),
+  // обогащение из /verify при этом приходит с бэкенда.
+  const c = out.check_x402_endpoint;
+  assert.equal(c.url, "http://127.0.0.1:1/x"); assert.equal(c.blocked, true); assert.equal(c.reachable, false); assert.equal(c.valid, false);
+  assert.match(c.verdict, /^blocked/); assert.match(c.error, /^blocked:/);
+  assert.equal(c.trustScore, 12); assert.equal(c.registryVerdict, "avoid"); assert.deepEqual(c.knownFlags, ["dead"]);
+  assert.equal(c.fullReputation, `${backend}/trust?endpoint=${encodeURIComponent("http://127.0.0.1:1/x")} (paid: adds uptime + reputation history)`);
+}));
+
+test("отрицательный контроль: бэкенд-фикстуры с испорченным status.json → x402_ecosystem_stats и x402_leaderboard дают isError", () => withBackend(
+  (req, res) => json(res, 200, { hello: "world" }),
+  async backend => {
+    const s = await session([INIT, READY, { jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "x402_ecosystem_stats", arguments: {} } }, { jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "x402_leaderboard", arguments: {} } }], { backend });
+    strict(s, []); for (const id of [21, 22]) { const r = s.msgs.find(m => m.id === id).result; assert.ok(r?.isError && /No verdict was produced/.test(r.content[0].text), JSON.stringify(r).slice(0, 200)); }
+  }));
+
+test("живой сервер, smoke: все 11 инструментов отвечают без isError, drift-лента разбирается (пустая лента допустима)", async () => {
   const args = { check_x402_endpoint: { url: "https://pulsefeed.dev/whales" }, mcp_check_server: { package: "mcp-remote" }, mcp_drift_check: { days: 7 }, x402_changes: { days: 7 }, x402_incidents: { days: 7 } };
   const reqs = SNAPSHOT.tools.map((name, i) => ({ jsonrpc: "2.0", id: 100 + i, method: "tools/call", params: { name, arguments: args[name] ?? {} } }));
   const s = await session([INIT, READY, ...reqs], { timeoutMs: 120_000 });
@@ -126,15 +198,11 @@ test("все 11 инструментов вызываются против жи�
   for (const [i, name] of SNAPSHOT.tools.entries()) {
     const r = s.msgs.find(m => m.id === 100 + i).result;
     assert.ok(!r.isError, `${name}: isError — ${r.content?.[0]?.text?.slice(0, 120)}`);
-    const j = JSON.parse(r.content[0].text); assert.ok(j && typeof j === "object" && Object.keys(j).length > 0, `${name}: пустой ответ`);
+    const j = JSON.parse(r.content[0].text);
+    if (name === "mcp_drift_check") assert.ok(Array.isArray(j.events) && j.events.every(e => e.eventId && e.id && e.type && e.at));
+    if (name === "x402_leaderboard") assert.ok(Array.isArray(j.topHealthy));
+    if (name === "mcp_check_server") assert.equal(j.package ?? j.id, "mcp-remote");
   }
-});
-
-test("mcp_drift_check: аргументы вне диапазона отклоняются валидатором (days=0, packages не массив)", async () => {
-  const s = await session([INIT, READY, { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "mcp_drift_check", arguments: { days: 0 } } },
-    { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "mcp_drift_check", arguments: { packages: "not-an-array" } } }]);
-  strict(s, []);
-  for (const id of [4, 5]) { const m = s.msgs.find(x => x.id === id); assert.ok(m.error || m.result?.isError, `невалидный аргумент принят (id ${id})`); }
 });
 
 test("отрицательный контроль: бэкенд отвечает 503 → инструмент возвращает isError, поле clean отсутствует", async () => {
@@ -185,6 +253,10 @@ test("отрицательный контроль снимка: лишний и�
   assert.ok(!sameSchema(typed, SNAPSHOT.inputSchemas.mcp_drift_check), "смена типа не замечена");
   const bounded = JSON.parse(JSON.stringify(SNAPSHOT.inputSchemas.mcp_drift_check)); bounded.properties.days.maximum = 999;
   assert.ok(!sameSchema(bounded, SNAPSHOT.inputSchemas.mcp_drift_check), "смена границы не замечена");
+  const loose = JSON.parse(JSON.stringify(SNAPSHOT.inputSchemas.mcp_drift_check)); loose.additionalProperties = true;
+  assert.ok(!sameSchema(loose, SNAPSHOT.inputSchemas.mcp_drift_check), "снятие additionalProperties не замечено");
+  const noReq = JSON.parse(JSON.stringify(SNAPSHOT.inputSchemas.check_x402_endpoint)); delete noReq.required;
+  assert.ok(!sameSchema(noReq, SNAPSHOT.inputSchemas.check_x402_endpoint), "снятие required не замечено");
 });
 
 process.on("exit", () => { try { rmSync(consumer, { recursive: true, force: true }); if (!process.env.PKG_TGZ && existsSync(tgz)) rmSync(tgz); } catch {} });

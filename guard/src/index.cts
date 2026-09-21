@@ -91,24 +91,37 @@ export async function verify(
   const api = (opts.apiUrl ?? DEFAULT_API).replace(/\/$/, "");
   const f: FetchLike = opts.fetchImpl ?? (globalThis as any).fetch;
   if (!f) throw new Error("global fetch недоступен — передайте fetchImpl (Node 18+ или полифилл)");
+  const ms = opts.timeoutMs ?? 5000;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 5000);
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  // Таймаут срабатывает и тогда, когда fetchImpl не реагирует на abort (гонка с сигналом), и на чтении тела.
+  const timedOut = new Promise<never>((_, rej) => ctrl.signal.addEventListener("abort", () => rej(new PulseFeedUnavailableError(`PulseFeed request timed out after ${ms} ms`)), { once: true }));
+  const withTimeout = <T,>(p: Promise<T>): Promise<T> => Promise.race([p, timedOut]);
   try {
-    const r = await f(`${api}/verify?endpoint=${encodeURIComponent(endpoint)}`, {
-      signal: ctrl.signal, headers: { accept: "application/json" },
-    });
+    let r: any;
+    try {
+      r = await withTimeout(Promise.resolve(f(`${api}/verify?endpoint=${encodeURIComponent(endpoint)}`, { signal: ctrl.signal, headers: { accept: "application/json" } })));
+    } catch (e: any) {
+      // Сетевая ошибка и таймаут — тоже «PulseFeed недоступен», а не голое исключение fetch:
+      // потребитель ловит ОДИН класс (контролёр показал, что TypeError/AbortError уходили наружу как есть).
+      if (e instanceof PulseFeedUnavailableError) throw e;
+      const aborted = ctrl.signal.aborted || e?.name === "AbortError" || e?.name === "TimeoutError";
+      throw new PulseFeedUnavailableError(aborted ? `PulseFeed request timed out after ${ms} ms` : `PulseFeed request failed: ${e?.message ?? String(e)}`);
+    }
     // ⛔ Ошибка проверки ≠ вердикт «неизвестен». 21.09.2026 контролёр воспроизвёл: HTTP 503
     // возвращался как unknown, onError не срабатывал, и с onError:"block" оплата всё равно шла.
     // Теперь любая неисправность — исключение, которое guardFetch направляет в политику onError.
+    if (!r || typeof r.ok !== "boolean") throw new PulseFeedUnavailableError("PulseFeed fetch returned no Response");
     if (!r.ok) throw new PulseFeedUnavailableError(`PulseFeed HTTP ${r.status}`, r.status);
     let j: any;
-    try { j = await r.json(); } catch { throw new PulseFeedUnavailableError("PulseFeed returned non-JSON", r.status); }
+    try { j = await withTimeout(Promise.resolve(r.json())); } catch (e) { if (e instanceof PulseFeedUnavailableError) throw e; throw new PulseFeedUnavailableError("PulseFeed returned non-JSON", r.status); }
     if (!j || typeof j !== "object" || typeof j.known !== "boolean" || !VERDICTS.has(j.verdict)) {
       throw new PulseFeedUnavailableError("PulseFeed returned an unexpected body", r.status);
     }
     return j as TrustVerdict;
   } finally {
     clearTimeout(timer);
+    timedOut.catch(() => {});   // не оставлять необработанное отклонение, если гонку выиграл ответ
   }
 }
 

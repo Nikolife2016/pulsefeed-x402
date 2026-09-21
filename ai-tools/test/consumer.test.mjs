@@ -32,7 +32,10 @@ const mock = createServer((req, res) => {
     if (ep.includes("slow.example")) return setTimeout(() => json(200, { endpoint: ep, known: true, verdict: "safe" }), 2000);
     return json(200, { endpoint: ep, known: false, verdict: "unknown" });
   }
-  if (u.pathname === "/status.json") return u.searchParams.get("broken") ? json(200, { nope: 1 }) : json(200, { ecosystem: { total: 1 }, catalogAudit: { checked: 1 }, topHealthy: [{ url: "https://good.example/api" }], topProviders: [] });
+  if (u.pathname === "/status.json") return json(200, { ecosystem: { total: 1 }, catalogAudit: { checked: 1 }, topHealthy: [{ url: "https://good.example/api" }], topProviders: [] });
+  if (u.pathname === "/broken-garbage/status.json") return json(200, { topHealthy: "garbage", ecosystem: { total: 1 } });
+  if (u.pathname === "/broken-null/status.json") return json(200, { topHealthy: [], ecosystem: null });
+  if (u.pathname === "/broken-html/status.json") { res.statusCode = 200; res.setHeader("content-type", "text/html"); return res.end("<!doctype html>"); }
   json(404, { error: "not found" });
 });
 await new Promise(r => mock.listen(0, "127.0.0.1", r));
@@ -68,7 +71,8 @@ const out = {};
 for (const ep of ["good", "scam", "down", "html", "shape", "slow"]) { const v = await verifyX402Endpoint("https://" + ep + ".example/api", o); out[ep] = { verdict: v.verdict, known: v.known, checkFailed: v.checkFailed ?? false, error: v.error ?? null, advice: v.advice ?? null }; }
 out.badArg = await verifyX402Endpoint("not a url", o);
 out.catalog = Object.keys(await x402TrustCatalog(o)).sort();
-try { await x402TrustCatalog({ ...o, apiUrl: o.apiUrl + "/?broken=1" }); out.catalogBroken = "no throw"; } catch (e) { out.catalogBroken = e instanceof PulseFeedUnavailableError ? "PulseFeedUnavailableError" : "other:" + e.message; }
+out.catalogBroken = {};
+for (const b of ["garbage", "null", "html"]) { try { await x402TrustCatalog({ ...o, apiUrl: o.apiUrl + "/broken-" + b }); out.catalogBroken[b] = "no throw"; } catch (e) { out.catalogBroken[b] = e instanceof PulseFeedUnavailableError ? "PulseFeedUnavailableError:" + e.message : "other:" + e.message; } }
 console.log(JSON.stringify(out));`;
 for (const name of Object.keys(consumers)) {
   test(`core (${name}): verdicts pass through; 503 / non-JSON / wrong shape / timeout / bad argument → checkFailed, never a bare unknown`, async () => {
@@ -80,7 +84,7 @@ for (const name of Object.keys(consumers)) {
     assert.match(o.down.error, /HTTP 503/); assert.match(o.html.error, /non-JSON/); assert.match(o.shape.error, /unexpected body/); assert.match(o.slow.error, /timeout/);
     assert.equal(o.badArg.checkFailed, true); assert.match(o.badArg.error, /http\(s\) endpoint URL/);
     assert.deepEqual(o.catalog, ["catalogAudit", "dataset", "ecosystem", "note", "security", "topHealthy", "topProviders"]);
-    assert.equal(o.catalogBroken, "PulseFeedUnavailableError");
+    assert.match(o.catalogBroken.garbage, /^PulseFeedUnavailableError:.*unexpected shape/); assert.match(o.catalogBroken.null, /^PulseFeedUnavailableError:.*unexpected shape/); assert.match(o.catalogBroken.html, /^PulseFeedUnavailableError:.*non-JSON/);
   });
 }
 
@@ -153,24 +157,32 @@ for (const name of Object.keys(consumers)) {
   });
 }
 
+const README_TS = readFileSync(join(PKG, "README.md"), "utf8").match(/```ts\n(import \{ generateText[\s\S]*?)```/)[1];
 for (const name of Object.keys(consumers)) {
-  test(`TypeScript (${name}): consumers of core, vercel (inside generateText) and langchain type-check (tsc --noEmit)`, () => {
+  test(`TypeScript (${name}): the README Vercel example compiles as written (no casts), plus core/vercel/langchain consumers; our .d.ts checked with skipLibCheck:false`, () => {
     const dir = consumers[name];
+    const ai4 = name.startsWith("ai4");
+    // Дословный ts-блок README: модель подменена типизированной заглушкой (без сети/ключа), для ai 3/4 — форма maxSteps.
+    const example = README_TS.replace('import { openai } from "@ai-sdk/openai";', 'const openai = (id: string): any => ({ id });')
+      .replace(ai4 ? "stopWhen: stepCountIs(5)," : "__nothing__", "maxSteps: 5,").replace(ai4 ? 'import { generateText, stepCountIs } from "ai";' : "__nothing__", 'import { generateText } from "ai";');
+    writeFileSync(join(dir, "readme.mts"), example.replace(/^await generateText/m, "export const r = generateText"));
     writeFileSync(join(dir, "t.mts"), `
 import { generateText } from "ai";
 import { verifyX402Endpoint, type VerifyResult, PulseFeedUnavailableError } from "pulsefeed-x402-ai-tools";
 import { pulsefeedTools, createPulsefeedTools } from "pulsefeed-x402-ai-tools/vercel";
-import { pulsefeedTools as lcTools } from "pulsefeed-x402-ai-tools/langchain";
+import { pulsefeedTools as lcTools, createPulsefeedTools as lcCreate } from "pulsefeed-x402-ai-tools/langchain";
 export const v: Promise<VerifyResult> = verifyX402Endpoint("https://x.example");
 export const e = new PulseFeedUnavailableError("x", 503);
 export const t = createPulsefeedTools({ timeoutMs: 100 });
-export const run = (model: any) => generateText({ model, tools: pulsefeedTools, prompt: "x" } as any);
-export const n: string[] = lcTools.map(x => x.name);`);
-    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmit: true, skipLibCheck: true, target: "ES2022", lib: ["ES2022", "DOM"] }, files: ["t.mts"] }));
+export const run = (model: any) => generateText({ model, tools: pulsefeedTools, prompt: "x" });
+export const run2 = (model: any) => generateText({ model, tools: t, prompt: "x" });
+export const n: string[] = lcTools.map(x => x.name);
+export const n2: string[] = lcCreate({ timeoutMs: 100 }).map(x => x.name);`);
+    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmit: true, skipLibCheck: true, target: "ES2022", lib: ["ES2022", "DOM"] }, files: ["readme.mts", "t.mts"] }));
     execFileSync(join(dir, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.json"], { cwd: dir, encoding: "utf8" });
-    // Our own .d.ts files are checked with skipLibCheck: false (third-party typings excluded via a file that imports only the core).
-    writeFileSync(join(dir, "own.mts"), `import { verifyX402Endpoint } from "pulsefeed-x402-ai-tools"; export const p = verifyX402Endpoint("https://x.example");`);
-    writeFileSync(join(dir, "tsconfig.own.json"), JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmit: true, skipLibCheck: false, types: [], target: "ES2022", lib: ["ES2022", "DOM"] }, files: ["own.mts"] }));
+    // Наши .d.ts (всех трёх входов) проверяются с skipLibCheck:false; чужие типы — только те, что тянут наши декларации.
+    writeFileSync(join(dir, "own.mts"), `import { verifyX402Endpoint } from "pulsefeed-x402-ai-tools"; import { pulsefeedTools } from "pulsefeed-x402-ai-tools/vercel"; import { pulsefeedTools as lc } from "pulsefeed-x402-ai-tools/langchain"; export const p = verifyX402Endpoint("https://x.example"); export const k = Object.keys(pulsefeedTools); export const n = lc.length;`);
+    writeFileSync(join(dir, "tsconfig.own.json"), JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmit: true, skipLibCheck: false, types: [], target: "ES2022", lib: ["ESNext", "DOM"] }, files: ["own.mts"] }));
     execFileSync(join(dir, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.own.json"], { cwd: dir, encoding: "utf8" });
   });
 }
