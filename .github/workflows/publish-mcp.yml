@@ -174,6 +174,15 @@ jobs:
           PKG_TGZ: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/${{ steps.meta.outputs.tgz }}
           PKG_TEST_LOG: ${{ github.workspace }}/${{ steps.meta.outputs.dir }}/acceptance-exchange.jsonl
         run: npm test
+      - name: Rehearse the publish command itself (npm publish --dry-run on the same tarball path shape)
+        if: steps.meta.outputs.mode == 'publish' || steps.meta.outputs.mode == 'rehearse'
+        working-directory: ${{ steps.meta.outputs.dir }}
+        run: |
+          set -e
+          mkdir -p ../artefact && cp "${{ steps.meta.outputs.tgz }}" ../artefact/
+          cd .. && npm publish "./artefact/${{ steps.meta.outputs.tgz }}" --dry-run --access public --ignore-scripts 2>&1 | tee publish-dry-run.txt
+          grep -q "Tarball Contents" publish-dry-run.txt || { echo "::error::npm publish --dry-run did not describe the tarball — the publish argument is wrong"; exit 1; }
+          rm -rf artefact
       - name: Digest must equal the one accepted by the controller (release-accepted.json)
         if: steps.meta.outputs.mode == 'publish' || steps.meta.outputs.mode == 'rehearse'
         working-directory: ${{ steps.meta.outputs.dir }}
@@ -220,7 +229,9 @@ jobs:
         env:
           V: ${{ needs.verify.outputs.version }}
           NAME: ${{ needs.verify.outputs.name }}
-          TGZ: artefact/${{ needs.verify.outputs.tgz }}
+          # ./ обязателен: «artefact/<file>.tgz» npm 11 разбирает как GitHub-шорткат owner/repo и лезет в git
+          # (первый настоящий publish 21.09 упал на `git ls-remote ssh://git@github.com/artefact/…`).
+          TGZ: ./artefact/${{ needs.verify.outputs.tgz }}
         run: |
           set -e
           LOCAL=$(cat artefact/integrity.txt)
