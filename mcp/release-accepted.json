@@ -1,0 +1,13 @@
+{
+  "package": "pulsefeed-x402-mcp",
+  "version": "1.1.0",
+  "integrity": "sha512-INf1GTMevozN0c8zr36kc5QHAfCONxTFRSB2RX+zcwEOxieOBiAMQoI5Gg6xzA5BI1E3Z0zxaISDwpb39jgyzg==",
+  "sha": "8126fc438c7ea5f6fe6093d1c6e99b6b72853494",
+  "workflow": ".github/workflows/publish-mcp.yml",
+  "workflowSha256": "814172497bf27d309541ee281c6313ab2e17292ff6ebc37245a2bd9a8764ad5f",
+  "acceptedBy": "GPT-6 Astra (controller), round 8 (code, astra_pkg_gate8.md) + round 9 (workflow fix, astra_pkg_gate9b.md): «ДОПУЩЕНО: pulsefeed-x402-mcp@1.1.0» for this SHA and this digest only",
+  "acceptedAt": "2026-09-21T13:15:15.462Z",
+  "evidence": "CI verify-only run 35604064654 (tarball byte-identical to the round-8 build, run 35587224313); acceptance 24/24 on Node 20 and 24.15.0 (run 35587232711); first tag publish (run 35603241472) failed before upload on the npm argument shape — fixed in this SHA",
+  "knownNonBlocking": "N17 (P3): an already-aborted signal passed straight to the internal safeFetch can leave an unhandled rejection; not reachable through the MCP tool; to be fixed in the next patch release",
+  "note": "Publication straight to latest (npm OIDC authorises publish only) is an owner decision; the owner ordered the publication on 2026-09-21."
+}
