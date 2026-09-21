@@ -1,13 +1,15 @@
 {
   "name": "pulsefeed-x402-mcp",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "description": "MCP server for the x402 agent-payment ecosystem: find working x402 services, verify endpoints before paying, and access PulseFeed real-time Base on-chain intelligence.",
   "type": "module",
   "bin": {
     "pulsefeed-x402-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "mcp",
@@ -30,18 +32,21 @@
     "usdc"
   ],
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc",
-    "prepare": "tsc",
-    "start": "node --import tsx index.ts"
+    "prepack": "npm run clean && npm run build",
+    "test": "node --test test/tools.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@x402/core": "^2.26.0",
+    "undici": "^6.28.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3",
-    "@types/node": "^24.0.0"
+    "typescript": "^5.9.3"
   },
   "repository": {
     "type": "git",
@@ -52,5 +57,9 @@
   "bugs": {
     "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues"
   },
-  "mcpName": "io.github.Nikolife2016/pulsefeed-x402"
+  "mcpName": "io.github.Nikolife2016/pulsefeed-x402",
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
 }

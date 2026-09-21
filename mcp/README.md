@@ -1,12 +1,25 @@
 # pulsefeed-x402-mcp
 
-MCP server for the **x402 agent-payment ecosystem**. Gives AI agents (Claude Desktop, Cursor, Cline, Windsurf, VS Code) tools to navigate x402:
+MCP server for the **x402 agent-payment ecosystem** and the **MCP supply chain**. Gives AI agents (Claude Desktop, Cursor, Cline, Windsurf, VS Code) eleven tools, all free, no API key:
 
-- **`x402_working_services`** — list x402 services that are actually alive (a large share of listed endpoints are dead/invalid — live figure at pulsefeed.dev/status.json).
-- **`check_x402_endpoint`** — verify an endpoint returns a valid x402 challenge before paying it.
-- **`pulsefeed_products`** — PulseFeed's paid on-chain intelligence products (Base token pulse, whale alerts, smart-money flow, momentum, trust oracle).
+**Before your agent pays**
+- **`check_x402_endpoint`** — is this x402 endpoint live, and does it return a valid payment challenge? Liveness, price, network, pay/avoid verdict.
+- **`x402_working_services`** — the x402 services that are actually alive, ranked by trust score.
+- **`x402_leaderboard`** — most reliable services over time.
+- **`x402_incidents`** — recent scam/anomaly incidents: payTo hijack, price bait-and-switch, honeypots, dead-on-arrival.
+- **`x402_changes`** — what changed in the ecosystem since yesterday.
+- **`x402_ecosystem_stats`** — population, liveness, dead share.
+- **`x402_data_sample`** — a sample of the trust dataset.
 
-Backed by [PulseFeed](https://pulsefeed.dev/status).
+**Before your agent installs an MCP server**
+- **`mcp_check_server`** — audit an npm MCP package: install scripts, abandonment, repository, licence, provenance — verdict safe/caution/avoid.
+- **`mcp_drift_check`** — the rug-pull check: what changed in a package *after* you adopted it — install script added later, ownership swapped, repository removed, unpublished, provenance lost. Pass your own dependency list.
+- **`mcp_security_report`** — state of MCP security with day-over-day deltas.
+
+**About PulseFeed**
+- **`pulsefeed_products`** — what PulseFeed offers and at what price.
+
+Backed by [PulseFeed](https://pulsefeed.dev), an independent daily re-audit of the x402 endpoint population and the whole MCP registry. The same tools are served over Streamable HTTP at `https://pulsefeed.dev/mcp-server`.
 
 ## Use in Claude Desktop / Cursor / Cline
 
@@ -21,17 +34,22 @@ Backed by [PulseFeed](https://pulsefeed.dev/status).
 }
 ```
 
-## Local run
+Config: `PULSEFEED_URL` overrides the backend base URL. Node 20+.
+
+When PulseFeed cannot be consulted (non-2xx, non-JSON, unexpected body, malformed drift events) a tool returns an MCP error (`isError: true`) saying that **no verdict was produced** — an agent must not read that as "clean" or "safe".
+
+## Development
+
 ```bash
-npm install
-npm run start      # tsx dev run
-# or build + run:
-npm run build && node dist/index.js
+npm ci --include=dev
+npm run build          # tsc → dist/
+npm test               # packs a tarball, installs it in a clean directory as a consumer would,
+                       # runs the server over stdio and checks the tool set against
+                       # test/live-tools.snapshot.json
 ```
 
-Config: `PULSEFEED_URL` env overrides the backend base URL.
+`dist/` and `node_modules/` are not tracked in git. The published tarball is built once in CI and tested as installed; publication requires `release-accepted.json` binding the version, the tarball digest, the reviewed commit and the workflow itself, and the same acceptance is re-run on the package as npm serves it — see `.github/workflows/publish-mcp.yml` and `CHANGELOG.md` for the versioning policy. Release: push a tag `mcp-v<version>` matching `package.json`, or run the workflow manually and type the version to confirm.
 
-## Publish (maintainer)
-```bash
-npm run build && npm publish --access public
-```
+## Licence
+
+MIT

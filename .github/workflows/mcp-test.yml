@@ -1,0 +1,24 @@
+# Приёмочный тест пакета на каждом изменении mcp/: тот же тест, что перед публикацией.
+name: mcp-test
+on:
+  push:
+    branches: [master]
+    paths: ["mcp/**", ".github/workflows/mcp-test.yml"]
+  pull_request:
+    paths: ["mcp/**"]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["20", "24.15.0"]   # заявленный минимум engines и версия релизного конвейера
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ matrix.node }}" }
+      - run: |
+          if git ls-files | grep -E '(^|/)(node_modules|dist)(/|$)'; then echo "::error::artefacts tracked in git"; exit 1; fi
+      - working-directory: mcp
+        run: npm ci --include=dev && npm run build && npm test

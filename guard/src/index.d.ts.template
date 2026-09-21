@@ -1,0 +1,3 @@
+// Типы ESM-входа: те же, что у CommonJS-реализации.
+export { guardFetch, verify, PaymentBlockedError, PulseFeedUnavailableError } from "./index.cjs";
+export type { Verdict, TrustVerdict, GuardOptions, GuardDecision } from "./index.cjs";

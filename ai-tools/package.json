@@ -1,0 +1,40 @@
+{
+  "name": "pulsefeed-x402-ai-tools",
+  "version": "1.1.0",
+  "description": "Drop-in AI-agent tools for x402 payment safety: verify whether an x402 endpoint is safe to pay before paying it, and discover working x402 services. Adapters for the Vercel AI SDK (ai 3–7) and LangChain, powered by PulseFeed.",
+  "type": "module",
+  "main": "./dist/core.js",
+  "types": "./dist/core.d.ts",
+  "exports": {
+    ".": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
+    "./vercel": { "types": "./dist/vercel.d.ts", "import": "./dist/vercel.js" },
+    "./langchain": { "types": "./dist/langchain.d.ts", "import": "./dist/langchain.js" }
+  },
+  "files": ["dist", "LICENSE", "CHANGELOG.md"],
+  "keywords": ["x402", "ai-agents", "agent-tools", "vercel-ai-sdk", "langchain", "trust", "safety", "payments", "base", "usdc", "mcp", "agentic-payments"],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run clean && npm run build",
+    "test": "node --test test/consumer.test.mjs"
+  },
+  "peerDependencies": {
+    "zod": ">=3 <5",
+    "ai": ">=3 <8",
+    "@langchain/core": ">=0.2 <2"
+  },
+  "peerDependenciesMeta": {
+    "ai": { "optional": true },
+    "@langchain/core": { "optional": true }
+  },
+  "devDependencies": {
+    "@langchain/core": "^1.2.12",
+    "typescript": "^5.9.0",
+    "zod": "^3.25.0"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "homepage": "https://pulsefeed.dev/status",
+  "repository": { "type": "git", "url": "git+https://github.com/Nikolife2016/pulsefeed-x402.git", "directory": "ai-tools" },
+  "bugs": { "url": "https://github.com/Nikolife2016/pulsefeed-x402/issues" }
+}
