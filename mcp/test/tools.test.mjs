@@ -248,18 +248,90 @@ test("контроль валидатора протокола: схема SDK �
   for (const bad of [{ jsonrpc: "2.0", id: 9, error: "garbage" }, { jsonrpc: "2.0", method: "notice", params: 42 }, { jsonrpc: "2.0", method: 42 }, { jsonrpc: "2.0", id: 1 }, { jsonrpc: "2.0", id: 1, result: {}, error: { code: 1, message: "x" } }, { jsonrpc: "1.0", id: 1, result: {} }, { __junk: "not json" }, "str", null]) assert.ok(!isRpc(bad), "принят мусор: " + JSON.stringify(bad));
 });
 
-test("парсер x402-челленджа из тарбола: валидные v1/v2 принимаются, {}/'garbage'/null/неполные предложения — нет", async () => {
+test("парсер x402-челленджа из тарбола: версия и обязательная для неё структура; v1/v2 принимаются, всё остальное — нет", async () => {
   const { parseChallenge, parseOffer } = await import(join(consumer, "node_modules", "pulsefeed-x402-mcp", "dist", "x402Challenge.js"));
-  const v1 = { scheme: "exact", network: "base", payTo: "0x7f5f784Ba98cEcFC0bA4336f0E48222A3d4d69a8", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", maxAmountRequired: "10000" };
-  const v2 = { scheme: "exact", network: "eip155:8453", payTo: "0x7f5f784Ba98cEcFC0bA4336f0E48222A3d4d69a8", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "10000" };
-  assert.deepEqual(parseChallenge({ x402Version: 1, accepts: [v1] }), [{ scheme: "exact", network: "base", payTo: v1.payTo, asset: v1.asset, amount: "10000", version: 1 }]);
-  assert.deepEqual(parseChallenge({ x402Version: 2, accepts: [v2] }), [{ scheme: "exact", network: "eip155:8453", payTo: v2.payTo, asset: v2.asset, amount: "10000", version: 2 }]);
-  assert.equal(parseChallenge({ accepts: [{}, "garbage", null, v2] }).length, 1, "мусор рядом с валидным должен отбрасываться, валидное — остаться");
-  for (const bad of [{ accepts: [{}] }, { accepts: ["garbage"] }, { accepts: [null] }, { accepts: {} }, {}, null, "x", [], { accepts: [] },
-    { accepts: [{ ...v2, payTo: "not-an-address" }] }, { accepts: [{ ...v2, amount: "1.5" }] }, { accepts: [{ ...v2, amount: "abc" }] }, { accepts: [{ ...v2, scheme: "" }] }, { accepts: [{ ...v2, asset: undefined }] }, { accepts: [{ ...v1, maxAmountRequired: undefined }] }])
-    assert.deepEqual(parseChallenge(bad), [], "принят невалидный челлендж: " + JSON.stringify(bad));
-  assert.equal(parseOffer({ ...v2, amount: 10000 }).amount, "10000", "целое число как сумма допустимо");
-  assert.equal(parseOffer({ ...v2, amount: -1 }), null);
+  const PAYTO = "0x7f5f784Ba98cEcFC0bA4336f0E48222A3d4d69a8", ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const v1 = { scheme: "exact", network: "base", maxAmountRequired: "10000", resource: "https://x.example/api", description: "d", mimeType: "application/json", payTo: PAYTO, maxTimeoutSeconds: 60, asset: ASSET };
+  const v2 = { scheme: "exact", network: "eip155:8453", amount: "10000", asset: ASSET, payTo: PAYTO, maxTimeoutSeconds: 60, resource: { url: "https://x.example/api" }, extra: { name: "USD Coin", version: "2" } };
+  assert.deepEqual(parseChallenge({ x402Version: 1, accepts: [v1] }), [{ scheme: "exact", network: "base", payTo: PAYTO, asset: ASSET, amount: "10000", maxTimeoutSeconds: 60, resource: "https://x.example/api", version: 1 }]);
+  assert.deepEqual(parseChallenge({ x402Version: 2, accepts: [v2] }), [{ scheme: "exact", network: "eip155:8453", payTo: PAYTO, asset: ASSET, amount: "10000", maxTimeoutSeconds: 60, resource: "https://x.example/api", version: 2 }]);
+  assert.equal(parseChallenge({ x402Version: 2, accepts: [{}, "garbage", null, v2] }).length, 1, "мусор рядом с валидным отбрасывается, валидное остаётся");
+  const bad = {
+    "accepts:[{}]": { x402Version: 1, accepts: [{}] }, "accepts:['garbage']": { x402Version: 1, accepts: ["garbage"] }, "accepts:[null]": { x402Version: 1, accepts: [null] },
+    "accepts:{}": { x402Version: 1, accepts: {} }, "no accepts": { x402Version: 1 }, "no version": { accepts: [v1] }, "version 999": { x402Version: 999, accepts: [v1] },
+    "version '1' as string": { x402Version: "1", accepts: [v1] }, "v2 body with v1 fields": { x402Version: 2, accepts: [v1] }, "v1 body with v2 fields": { x402Version: 1, accepts: [v2] },
+    "no maxTimeoutSeconds": { x402Version: 1, accepts: [{ ...v1, maxTimeoutSeconds: undefined }] }, "maxTimeoutSeconds 0": { x402Version: 1, accepts: [{ ...v1, maxTimeoutSeconds: 0 }] },
+    "amount 1e21": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: 1e21 }] }, "amount '1.5'": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: "1.5" }] }, "amount 'abc'": { x402Version: 1, accepts: [{ ...v1, maxAmountRequired: "abc" }] }, "amount -1": { x402Version: 2, accepts: [{ ...v2, amount: -1 }] },
+    "bad payTo": { x402Version: 1, accepts: [{ ...v1, payTo: "not-an-address" }] }, "empty scheme": { x402Version: 1, accepts: [{ ...v1, scheme: "" }] }, "no asset": { x402Version: 1, accepts: [{ ...v1, asset: undefined }] },
+    "no resource (v1)": { x402Version: 1, accepts: [{ ...v1, resource: undefined }] }, "resource not object (v2)": { x402Version: 2, accepts: [{ ...v2, resource: "https://x.example" }] }, "resource without url (v2)": { x402Version: 2, accepts: [{ ...v2, resource: {} }] },
+    "null": null, "string": "x", "array": [], "empty accepts": { x402Version: 1, accepts: [] },
+  };
+  for (const [name, body] of Object.entries(bad)) assert.deepEqual(parseChallenge(body), [], "принят невалидный челлендж: " + name);
+  assert.equal(parseOffer({ ...v2, amount: 10000 }, 2).amount, "10000", "безопасное целое число как сумма допустимо");
+  assert.equal(parseOffer({ ...v1, maxAmountRequired: Number.MAX_SAFE_INTEGER + 2 }, 1), null, "небезопасное целое — нет");
+});
+
+// Публичные фикстуры pulsefeed.dev/fixtures/x402/<name>: детерминированные 402-тела (валидные и типовые поломки).
+// Страж SSRF по замыслу не пускает инструмент на локальный мок, поэтому отрицательные контроли N9 на уровне
+// ИНСТРУМЕНТА идут через эти фикстуры; обогащение из /verify — с локального бэкенда.
+const FIX = "https://pulsefeed.dev/fixtures/x402/";
+test("check_x402_endpoint на публичных фикстурах: валидные v1/v2 → valid:true; empty/garbage/null/wrong-version/mismatch/no-timeout/huge-amount/bad-amount/bad-payto/not-json → valid:false; mixed → valid:true", () => withBackend(fixtures, async backend => {
+  const names = ["valid-v1", "valid-v2", "mixed", "empty-offer", "garbage", "null-offer", "no-accepts", "wrong-version", "mismatch", "no-timeout", "huge-amount", "bad-amount", "bad-payto", "not-json", "ok-200"];
+  const reqs = names.map((n, i) => ({ jsonrpc: "2.0", id: 300 + i, method: "tools/call", params: { name: "check_x402_endpoint", arguments: { url: FIX + n } } }));
+  const s = await session([INIT, READY, ...reqs], { backend, timeoutMs: 180_000 });
+  strict(s, reqs.map(r => r.id));
+  const out = Object.fromEntries(names.map((n, i) => [n, body(s, 300 + i).j]));
+  for (const n of ["valid-v1", "valid-v2", "mixed"]) { const j = out[n]; assert.equal(j.status, 402, n); assert.equal(j.valid, true, n + ": " + JSON.stringify(j)); assert.equal(j.payTo, "0x1111111111111111111111111111111111111111"); assert.equal(j.price, "10000"); assert.match(j.verdict, /^live/); }
+  assert.equal(out["valid-v1"].x402Version, 1); assert.equal(out["valid-v2"].x402Version, 2); assert.equal(out["mixed"].offers, 1);
+  for (const n of ["empty-offer", "garbage", "null-offer", "no-accepts", "wrong-version", "mismatch", "no-timeout", "huge-amount", "bad-amount", "bad-payto", "not-json"]) {
+    const j = out[n]; assert.equal(j.status, 402, n); assert.equal(j.valid, false, n + " объявлен валидным: " + JSON.stringify(j)); assert.match(j.verdict, /^avoid/, n); assert.ok(!("price" in j), n + ": price не должен заполняться"); assert.ok(typeof j.error === "string" && j.error, n + ": нет объяснения");
+  }
+  assert.match(out["not-json"].error, /not JSON/);
+  assert.equal(out["ok-200"].status, 200); assert.equal(out["ok-200"].valid, false); assert.match(out["ok-200"].verdict, /^avoid/);
+}));
+
+test("check_x402_endpoint: 402 с незавершающимся телом (фикстура hang) → таймаут 12 с, valid:false, без зависания", () => withBackend(fixtures, async backend => {
+  const t0 = Date.now();
+  const s = await session([INIT, READY, { jsonrpc: "2.0", id: 41, method: "tools/call", params: { name: "check_x402_endpoint", arguments: { url: FIX + "hang" } } }], { backend, timeoutMs: 40_000 });
+  strict(s, [41]); const { j } = body(s, 41); const dt = Date.now() - t0;
+  assert.equal(j.status, 402); assert.equal(j.valid, false); assert.match(j.error, /timeout while reading the 402 body/); assert.match(j.verdict, /^avoid/);
+  assert.ok(dt >= 11_000 && dt < 25_000, "ожидался таймаут ~12 с, прошло " + dt + " мс");
+}));
+
+test("страж SSRF из тарбола: loopback/private/link-local в ЛЮБОЙ записи (IPv4, IPv4-mapped/compatible IPv6, NAT64, 6to4, hex/decimal/short IPv4, localhost, file:) → SsrfBlocked и НОЛЬ сетевых вызовов; публичный IP → один вызов; редирект на приватный адрес → блок", async () => {
+  const { safeFetch, SsrfBlocked, ipBlockedReason } = await import(join(consumer, "node_modules", "pulsefeed-x402-mcp", "dist", "ssrfGuard.js"));
+  let calls = []; const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { calls.push(String(url)); if (String(url).includes("redirect-me")) return new Response("", { status: 302, headers: { location: "http://127.0.0.1/admin" } }); return new Response("{}", { status: 200, headers: { "content-type": "application/json" } }); };
+  try {
+    const blocked = ["http://127.0.0.1/admin", "http://[::ffff:127.0.0.1]/admin", "http://[::ffff:7f00:1]/admin", "http://[::ffff:169.254.169.254]/latest/meta-data/", "http://[::ffff:a9fe:a9fe]/", "http://[64:ff9b::7f00:1]/", "http://[64:ff9b::127.0.0.1]/", "http://[2002:7f00:1::]/", "http://[2002:c0a8:101::]/", "http://[::127.0.0.1]/", "http://[::1]/", "http://[::]/", "http://[fe80::1]/", "http://[fc00::1]/", "http://[fd00::1]/", "http://[ff02::1]/", "http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "http://192.168.1.1/", "http://172.16.0.1/", "http://100.64.0.1/", "http://0.0.0.0/", "http://2130706433/", "http://0x7f000001/", "http://017700000001/", "http://127.1/", "http://127.0.0.1:8080/", "http://localhost/", "http://foo.localhost/", "http://metadata.internal/", "http://printer.local/", "file:///etc/passwd", "ftp://93.184.216.34/", "gopher://93.184.216.34/"];
+    for (const u of blocked) {
+      calls = [];
+      let err = null; try { await safeFetch(u, { timeoutMs: 2000 }); } catch (e) { err = e; }
+      assert.ok(err instanceof SsrfBlocked, u + ": не SsrfBlocked: " + (err && err.message));
+      assert.equal(calls.length, 0, u + ": сетевой вызов состоялся: " + JSON.stringify(calls));
+    }
+    calls = []; const r = await safeFetch("http://93.184.216.34/", { timeoutMs: 2000 }); assert.equal(r.status, 200); assert.deepEqual(calls, ["http://93.184.216.34/"]);
+    calls = []; let err = null; try { await safeFetch("http://93.184.216.34/redirect-me", { timeoutMs: 2000 }); } catch (e) { err = e; }
+    assert.ok(err instanceof SsrfBlocked && /loopback/.test(err.message), "редирект на loopback не заблокирован: " + (err && err.message)); assert.equal(calls.length, 1, "после блокировки редиректа не должно быть второго вызова");
+    for (const ip of ["2606:4700::1111", "93.184.216.34", "2002:5db8:d822::", "64:ff9b::5db8:d822"]) assert.equal(ipBlockedReason(ip), null, ip + " публичный, но заблокирован");
+    for (const ip of ["2001:0:1:2:3:4:5:6"]) assert.ok(ipBlockedReason(ip), ip + " (Teredo) должен блокироваться");
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test("safeFetch из тарбола: таймаут действует на чтение тела (fetch, отдавший заголовки и зависший на json) и на внешний сигнал", async () => {
+  const { safeFetch } = await import(join(consumer, "node_modules", "pulsefeed-x402-mcp", "dist", "ssrfGuard.js"));
+  const realFetch = globalThis.fetch;
+  const hanging = async (url, init) => ({ status: 402, headers: new Headers({ "content-type": "application/json" }), json: () => new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true })) });
+  globalThis.fetch = hanging;
+  try {
+    const t0 = Date.now(); const res = await safeFetch("http://93.184.216.34/", { timeoutMs: 300 });
+    assert.equal(res.status, 402);
+    await assert.rejects(res.json(), e => e.name === "AbortError", "тело должно оборваться по таймауту");
+    const dt = Date.now() - t0; assert.ok(dt >= 250 && dt < 3000, "таймаут тела не сработал вовремя: " + dt + " мс");
+    const outer = new AbortController(); const res2 = await safeFetch("http://93.184.216.34/", { timeoutMs: 60_000, signal: outer.signal });
+    setTimeout(() => outer.abort(), 100); const t1 = Date.now();
+    await assert.rejects(res2.json(), e => e.name === "AbortError", "внешний сигнал не пробросился в чтение тела"); assert.ok(Date.now() - t1 < 3000);
+  } finally { globalThis.fetch = realFetch; }
 });
 
 test("check_x402_endpoint против живого сервера: настоящий 402-челлендж → valid:true, цена/сеть/получатель/версия заполнены", async () => {

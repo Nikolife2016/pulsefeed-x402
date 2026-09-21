@@ -30,14 +30,46 @@ function ipv4Blocked(ip: string): string | null {
   return null;
 }
 
+/** Развернуть IPv6 в 16 байт (или null, если это не IPv6). Понимает «::», точечный IPv4-хвост и zone id. */
+export function ipv6Bytes(ip: string): Uint8Array | null {
+  let s = ip.toLowerCase().replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  if (!net.isIPv6(s)) return null;
+  // Точечный IPv4-хвост (::ffff:127.0.0.1, ::127.0.0.1, 64:ff9b::127.0.0.1) → два hex-слова.
+  const tail = s.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (tail) {
+    const p = tail.slice(1, 5).map(Number);
+    s = s.slice(0, tail.index) + ((p[0] << 8) | p[1]).toString(16) + ":" + ((p[2] << 8) | p[3]).toString(16);
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - head.length - rest.length;
+  if (missing < 0 || (halves.length === 1 && missing !== 0)) return null;
+  const words = [...head, ...Array(halves.length === 2 ? missing : 0).fill("0"), ...rest].map(w => parseInt(w, 16));
+  if (words.length !== 8 || words.some(w => Number.isNaN(w) || w < 0 || w > 0xffff)) return null;
+  const out = new Uint8Array(16);
+  words.forEach((w, i) => { out[2 * i] = w >> 8; out[2 * i + 1] = w & 0xff; });
+  return out;
+}
+
+const dotted = (b: Uint8Array, at: number) => `${b[at]}.${b[at + 1]}.${b[at + 2]}.${b[at + 3]}`;
+
 function ipv6Blocked(ip: string): string | null {
-  const s = ip.toLowerCase().replace(/^\[|\]$/g, "");
-  if (s === "::1" || s === "::") return "IPv6 loopback/unspecified";
-  if (s.startsWith("fe80")) return "IPv6 link-local";
-  if (/^f[cd]/.test(s)) return "IPv6 unique-local (fc00::/7)";
-  // IPv4-mapped: ::ffff:127.0.0.1
-  const m = s.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (m) return ipv4Blocked(m[1]);
+  const b = ipv6Bytes(ip);
+  if (!b) return "невалидный IPv6";
+  const zeroTo = (n: number) => b.slice(0, n).every(x => x === 0);
+  if (zeroTo(15) && (b[15] === 0 || b[15] === 1)) return b[15] ? "IPv6 loopback (::1)" : "IPv6 unspecified (::)";
+  // Встроенный IPv4 проверяем как IPv4 — в ЛЮБОЙ записи (контролёр обошёл точечную проверку через ::ffff:7f00:1):
+  //   ::ffff:a.b.c.d (IPv4-mapped), ::a.b.c.d (IPv4-compatible), 64:ff9b::a.b.c.d (NAT64), 2002:AABB:CCDD:: (6to4).
+  if (zeroTo(10) && b[10] === 0xff && b[11] === 0xff) { const r = ipv4Blocked(dotted(b, 12)); return r ? `IPv4-mapped ${dotted(b, 12)}: ${r}` : null; }
+  if (zeroTo(12)) { const r = ipv4Blocked(dotted(b, 12)); return r ? `IPv4-compatible ${dotted(b, 12)}: ${r}` : "IPv4-compatible IPv6 (устаревшая форма)"; }
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b.slice(4, 12).every(x => x === 0)) { const r = ipv4Blocked(dotted(b, 12)); return r ? `NAT64 ${dotted(b, 12)}: ${r}` : null; }
+  if (b[0] === 0x20 && b[1] === 0x02) { const r = ipv4Blocked(dotted(b, 2)); return r ? `6to4 ${dotted(b, 2)}: ${r}` : null; }
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return "IPv6 link-local (fe80::/10)";
+  if ((b[0] & 0xfe) === 0xfc) return "IPv6 unique-local (fc00::/7)";
+  if (b[0] === 0xff) return "IPv6 multicast (ff00::/8)";
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0 && b[3] === 0) return "Teredo (2001::/32) — встроенные IPv4 скрыты";
   return null;
 }
 
@@ -73,29 +105,35 @@ export async function assertSafeUrl(raw: string): Promise<URL> {
 }
 
 // fetch с проверкой КАЖДОГО редиректа (fetch сам по 302 ушёл бы куда угодно).
+// Таймаут действует на ВСЁ: заголовки и чтение тела (контролёр показал: таймер снимался при заголовках, сигнал
+// вызывающего подменялся, и сервер с незавершающимся телом держал инструмент бесконечно). Сигнал вызывающего
+// объединяется с таймаутом (AbortSignal.any), таймер — unref, чтобы не держать процесс.
 export async function safeFetch(
   raw: string,
   init: RequestInit & { timeoutMs?: number } = {},
   maxRedirects = 3,
 ): Promise<Response> {
-  const { timeoutMs = 12000, ...rest } = init;
+  const { timeoutMs = 12000, signal: outer, ...rest } = init;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new Error(`timeout after ${timeoutMs} ms`)), timeoutMs);
+  (timer as any).unref?.();
+  // Сигнал вызывающего объединяется с нашим (AbortSignal.any с Node 20.3; ниже — ручная пересылка).
+  if (outer) { if (outer.aborted) ctrl.abort(outer.reason); else outer.addEventListener("abort", () => ctrl.abort(outer.reason), { once: true }); }
+  const signal = ctrl.signal;
   let current = raw;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     await assertSafeUrl(current);
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    let res: Response;
-    try {
-      res = await fetch(current, { ...rest, redirect: "manual", signal: ctrl.signal });
-    } finally { clearTimeout(timer); }
+    if (signal.aborted) throw new Error("aborted before request");
+    const res = await fetch(current, { ...rest, redirect: "manual", signal });
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location");
-      if (!loc) return res;
-      if (hop === maxRedirects) throw new SsrfBlocked("слишком много редиректов");
+      if (!loc) { clearTimeout(timer); return res; }
+      if (hop === maxRedirects) { clearTimeout(timer); throw new SsrfBlocked("слишком много редиректов"); }
       current = new URL(loc, current).toString();
       continue;
     }
-    return res;
+    return res;   // таймер остаётся взведённым: он же оборвёт чтение тела; сработает вхолостую, если тело уже прочитано
   }
+  clearTimeout(timer);
   throw new SsrfBlocked("слишком много редиректов");
 }

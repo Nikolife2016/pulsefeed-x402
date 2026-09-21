@@ -15,10 +15,19 @@ reached end of life is treated as minor and is stated here.
   clean") when PulseFeed answers with a non-2xx status, non-JSON, an unexpected body, or malformed drift
   events (an event needs non-empty `id`, `type` and a parseable `at`). Before, backend failures could surface
   as an exception or, for `pulsefeed_products`, as raw HTML.
-- `check_x402_endpoint` validates the 402 body before saying `valid: true`: a payment offer needs `scheme`,
-  `network`, an EVM `payTo`, `asset` and an integer amount (`maxAmountRequired` for x402 v1, `amount` for v2).
-  Before, `{"accepts":[{}]}` or `{"accepts":["garbage"]}` counted as a valid challenge and produced the verdict
-  "safe to consider paying". The answer now also carries `x402Version` and the number of valid `offers`.
+- `check_x402_endpoint` validates the 402 body by protocol version before saying `valid: true`: `x402Version`
+  must be 1 or 2, and each offer needs `scheme`, `network`, an EVM `payTo`, `asset`, `resource` (a string in
+  v1, `{url}` in v2), a positive integer `maxTimeoutSeconds` and a decimal-digit amount (`maxAmountRequired`
+  in v1, `amount` in v2). Before, `{"accepts":[{}]}` or `["garbage"]` counted as a valid challenge with the
+  verdict "safe to consider paying"; a v2 body with v1 fields, version 999, a missing timeout or `1e21` as the
+  amount were accepted too. The answer carries `x402Version` and the number of valid `offers`; a 402 whose body
+  is not JSON or never finishes says so in `error`. Conformance fixtures: `pulsefeed.dev/fixtures/x402`.
+- SSRF guard: an embedded IPv4 address is checked in every IPv6 form — IPv4-mapped in hex (`::ffff:7f00:1`),
+  IPv4-compatible, NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) — plus multicast and Teredo. Before,
+  `http://[::ffff:127.0.0.1]/` and `[::ffff:169.254.169.254]` passed the guard (only the dotted form was
+  recognised). The acceptance test asserts zero network calls for every blocked form.
+- The 12-second timeout of `check_x402_endpoint` now covers reading the 402 body, and the caller's abort
+  signal is forwarded into `safeFetch`; a server that never finishes the body used to hold the tool forever.
 - `pulsefeed_products` requests JSON explicitly (the root route serves HTML without `accept: application/json`).
 - `x402_changes` and `x402_incidents` accept `days`; `mcp_drift_check` limits `packages` to 200 and `days`
   to 1–365, matching the live server.

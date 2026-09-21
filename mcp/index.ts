@@ -61,17 +61,21 @@ server.registerTool(
       // обратно модели. Страж проверяет адрес ПОСЛЕ разрешения имени и запрещает
       // переходы по редиректам: без первого обходится доменом, указывающим на 127.0.0.1,
       // без второго — редиректом туда же.
-      const res = await safeFetch(url, { signal: ctrl.signal, headers: { accept: "application/json" } });
-      clearTimeout(t);
-      out.reachable = true;
-      out.status = res.status;
-      if (res.status === 402) {
-        const b: any = await res.json().catch(() => null);
-        const offers = parseChallenge(b);
-        out.valid = offers.length > 0;
-        if (offers.length) { const a = offers[0]; out.price = a.amount; out.network = a.network; out.asset = a.asset; out.payTo = a.payTo; out.x402Version = a.version; out.offers = offers.length; }
-        else out.error = "402 without a valid x402 payment offer (needs scheme, network, payTo, asset and an integer amount)";
-      }
+      // Таймер снимается ПОСЛЕ чтения тела: сигнал общий для заголовков и тела (safeFetch объединяет его со своим).
+      let res: Response;
+      try {
+        res = await safeFetch(url, { signal: ctrl.signal, timeoutMs: 12000, headers: { accept: "application/json" } });
+        out.reachable = true;
+        out.status = res.status;
+        if (res.status === 402) {
+          let b: unknown = null, bodyError: string | null = null;
+          try { b = await res.json(); } catch (e: any) { bodyError = ctrl.signal.aborted || e?.name === "AbortError" ? "timeout while reading the 402 body" : "402 body is not JSON"; }
+          const offers = parseChallenge(b);
+          out.valid = offers.length > 0;
+          if (offers.length) { const a = offers[0]; out.price = a.amount; out.network = a.network; out.asset = a.asset; out.payTo = a.payTo; out.x402Version = a.version; out.offers = offers.length; }
+          else out.error = bodyError ?? "402 without a valid x402 payment offer (x402Version 1 or 2; each offer needs scheme, network, payTo, asset, resource, maxTimeoutSeconds and an integer amount)";
+        }
+      } finally { clearTimeout(t); }
     } catch (e: any) {
       // Заблокированный адрес — не сбой сети, и пользователь должен понимать разницу:
       // это отказ идти по адресу, а не «сервис недоступен».
