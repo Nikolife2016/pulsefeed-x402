@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { safeFetch, SsrfBlocked } from "./ssrfGuard.js";
-import { parseChallenge } from "./x402Challenge.js";
+import { parseChallenge, decodePaymentRequiredHeader } from "./x402Challenge.js";
 
 const BASE = process.env.PULSEFEED_URL || "https://pulsefeed.dev";
 
@@ -68,12 +68,23 @@ server.registerTool(
         out.reachable = true;
         out.status = res.status;
         if (res.status === 402) {
-          let b: unknown = null, bodyError: string | null = null;
-          try { b = await res.json(); } catch (e: any) { bodyError = ctrl.signal.aborted || e?.name === "AbortError" ? "timeout while reading the 402 body" : "402 body is not JSON"; }
-          const offers = parseChallenge(b);
+          // v2 несёт челлендж в заголовке PAYMENT-REQUIRED (тело может быть пустым); v1 — в JSON-теле.
+          // Заголовок читается первым; при его отсутствии или порче — тело. Источник вердикта фиксируется.
+          const headerValue = res.headers.get("payment-required");
+          const fromHeader = decodePaymentRequiredHeader(headerValue);
+          let offers = parseChallenge(fromHeader), source: string | null = offers.length ? "PAYMENT-REQUIRED header" : null;
+          let bodyError: string | null = null;
+          if (!offers.length) {
+            let b: unknown = null;
+            try { b = await res.json(); } catch (e: any) { bodyError = ctrl.signal.aborted || e?.name === "AbortError" ? "timeout while reading the 402 body" : "402 body is not JSON"; }
+            offers = parseChallenge(b); if (offers.length) source = "body";
+          } else { res.body?.cancel().catch(() => {}); }
           out.valid = offers.length > 0;
-          if (offers.length) { const a = offers[0]; out.price = a.amount; out.network = a.network; out.asset = a.asset; out.payTo = a.payTo; out.x402Version = a.version; out.offers = offers.length; }
-          else out.error = bodyError ?? "402 without a valid x402 payment offer (x402Version 1 or 2; each offer needs scheme, network, payTo, asset, resource, maxTimeoutSeconds and an integer amount)";
+          if (offers.length) { const a = offers[0]; out.price = a.amount; out.network = a.network; out.asset = a.asset; out.payTo = a.payTo; out.x402Version = a.version; out.offers = offers.length; out.challengeSource = source; out.resource = a.resource; }
+          else {
+            out.error = headerValue && !fromHeader ? "PAYMENT-REQUIRED header is not base64 JSON" + (bodyError ? `; ${bodyError}` : "; body carries no valid offer either")
+              : bodyError ?? "402 without a valid x402 payment offer (x402Version 1 or 2 per @x402/core schema: v1 offers need scheme, network, maxAmountRequired, resource, description, payTo, maxTimeoutSeconds, asset; v2 needs a top-level resource.url and offers with scheme, CAIP-2 network, amount, asset, payTo, maxTimeoutSeconds)";
+          }
         }
       } finally { clearTimeout(t); }
     } catch (e: any) {

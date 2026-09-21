@@ -7,8 +7,13 @@
 // Защищаемся до соединения: только http(s), запрет приватных/loopback/link-local диапазонов
 // ПОСЛЕ резолва DNS (иначе обходится доменом, указывающим на 127.0.0.1), и ручная проверка
 // каждого редиректа (fetch по умолчанию идёт по 302 куда угодно — классический обход).
-import { lookup } from "node:dns/promises";
+import dns from "node:dns";
 import net from "node:net";
+import { Agent, fetch as undiciFetch, type Dispatcher } from "undici";
+
+/** Резолвер имён (подменяется в тестах): та же сигнатура, что у dns.lookup с { all: true }. */
+export type Resolver = (hostname: string, options: { all: true; [k: string]: unknown }, cb: (err: NodeJS.ErrnoException | null, addresses: { address: string; family: number }[]) => void) => void;
+const systemResolver: Resolver = (hostname, options, cb) => dns.lookup(hostname, { ...options, all: true }, cb as any);
 
 export class SsrfBlocked extends Error {
   constructor(reason: string) { super(`blocked: ${reason}`); this.name = "SsrfBlocked"; }
@@ -78,7 +83,7 @@ export function ipBlockedReason(ip: string): string | null {
 }
 
 // Проверяем один URL: схема + все IP, в которые резолвится хост.
-export async function assertSafeUrl(raw: string): Promise<URL> {
+export async function assertSafeUrl(raw: string, resolve: Resolver = systemResolver): Promise<URL> {
   let u: URL;
   try { u = new URL(raw); } catch { throw new SsrfBlocked("невалидный URL"); }
   if (u.protocol !== "http:" && u.protocol !== "https:") throw new SsrfBlocked(`схема ${u.protocol}`);
@@ -94,7 +99,7 @@ export async function assertSafeUrl(raw: string): Promise<URL> {
     throw new SsrfBlocked(`внутреннее имя ${host}`);
   }
   let addrs: { address: string }[];
-  try { addrs = await lookup(host, { all: true }); }
+  try { addrs = await new Promise((res, rej) => resolve(host, { all: true }, (e, a) => e ? rej(e) : res(a))); }
   catch { throw new SsrfBlocked(`DNS не резолвится: ${host}`); }
   if (!addrs.length) throw new SsrfBlocked(`нет A/AAAA: ${host}`);
   for (const a of addrs) {
@@ -104,43 +109,80 @@ export async function assertSafeUrl(raw: string): Promise<URL> {
   return u;
 }
 
-// fetch с проверкой КАЖДОГО редиректа (fetch сам по 302 ушёл бы куда угодно).
-// Таймаут действует на ВСЁ: заголовки и чтение тела (контролёр показал: таймер снимался при заголовках, сигнал
-// вызывающего подменялся, и сервер с незавершающимся телом держал инструмент бесконечно). Сигнал вызывающего
-// пересылается в наш; таймер снимается, когда тело дочитано (поток обёрнут), при отмене снаружи или при ошибке —
-// он держит процесс ровно столько, сколько идёт чтение, и не дольше timeoutMs.
-export async function safeFetch(
-  raw: string,
-  init: RequestInit & { timeoutMs?: number } = {},
-  maxRedirects = 3,
-): Promise<Response> {
-  const { timeoutMs = 12000, signal: outer, ...rest } = init;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error(`timeout after ${timeoutMs} ms`)), timeoutMs);
-  const done = () => clearTimeout(timer);
-  if (outer) {
-    if (outer.aborted) { done(); ctrl.abort(outer.reason); }
-    else outer.addEventListener("abort", () => { done(); ctrl.abort(outer.reason); }, { once: true });
-  }
-  const signal = ctrl.signal;
-  try {
-    let current = raw;
-    for (let hop = 0; hop <= maxRedirects; hop++) {
-      await assertSafeUrl(current);
-      if (signal.aborted) throw new Error("aborted before request");
-      const res = await fetch(current, { ...rest, redirect: "manual", signal });
-      if (res.status >= 300 && res.status < 400) {
-        const loc = res.headers.get("location");
-        if (!loc) { done(); return res; }
-        if (hop === maxRedirects) throw new SsrfBlocked("слишком много редиректов");
-        current = new URL(loc, current).toString();
-        continue;
-      }
-      return boundedBody(res, done);
+// Проверка адреса В МОМЕНТ СОЕДИНЕНИЯ, а не только заранее. Контролёр показал DNS rebinding: предварительный
+// lookup видел публичный адрес, а fetch резолвил имя заново и получал 127.0.0.1. Поэтому undici-агент получает
+// наш lookup: адреса, которые он вернёт, — единственные, к которым TCP подключится; запрещённый адрес здесь —
+// ошибка ДО соединения. Второго резолва нет по построению.
+export function guardedLookup(resolve: Resolver = systemResolver) {
+  return (hostname: string, options: any, callback: (err: Error | null, address?: any, family?: number) => void) => {
+    const opts = typeof options === "function" ? {} : (options ?? {});
+    const cb = typeof options === "function" ? options : callback;
+    if (net.isIP(hostname)) {
+      const r = ipBlockedReason(hostname);
+      if (r) return cb(new SsrfBlocked(r));
+      return opts.all ? cb(null, [{ address: hostname, family: net.isIPv6(hostname) ? 6 : 4 }]) : cb(null, hostname, net.isIPv6(hostname) ? 6 : 4);
     }
-    throw new SsrfBlocked("слишком много редиректов");
-  } catch (e) { done(); throw e; }
+    resolve(hostname, { ...opts, all: true }, (err, addrs) => {
+      if (err) return cb(err);
+      const list = (Array.isArray(addrs) ? addrs : [addrs]).filter(Boolean) as { address: string; family: number }[];
+      if (!list.length) return cb(new SsrfBlocked(`нет A/AAAA: ${hostname}`));
+      for (const a of list) { const r = ipBlockedReason(a.address); if (r) return cb(new SsrfBlocked(`${hostname} → ${a.address}: ${r}`)); }
+      return opts.all ? cb(null, list) : cb(null, list[0].address, list[0].family);
+    });
+  };
 }
+
+export interface SafeFetchInit extends Omit<RequestInit, "signal"> { timeoutMs?: number; signal?: AbortSignal | null }
+export type SafeFetch = (raw: string, init?: SafeFetchInit, maxRedirects?: number) => Promise<Response>;
+
+/**
+ * fetch с проверкой КАЖДОГО редиректа (fetch сам по 302 ушёл бы куда угодно) и адреса при соединении.
+ * Таймаут действует на ВСЁ: заголовки и чтение тела (контролёр показал: таймер снимался при заголовках, сигнал
+ * вызывающего подменялся, и сервер с незавершающимся телом держал инструмент бесконечно). Сигнал вызывающего
+ * пересылается в наш; таймер снимается, когда тело дочитано (поток обёрнут), при отмене снаружи или при ошибке.
+ * Фабрика: резолвер подменяется в тестах (имитация rebinding), агент один на экземпляр.
+ */
+export function createSafeFetch(opts: { resolve?: Resolver; dispatcher?: Dispatcher } = {}): SafeFetch {
+  const resolve = opts.resolve ?? systemResolver;
+  const dispatcher = opts.dispatcher ?? new Agent({ connect: { lookup: guardedLookup(resolve) as any } });
+  return async function safeFetch(raw, init = {}, maxRedirects = 3) {
+    const { timeoutMs = 12000, signal: outer, ...rest } = init;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(new Error(`timeout after ${timeoutMs} ms`)), timeoutMs);
+    const done = () => clearTimeout(timer);
+    if (outer) {
+      if (outer.aborted) { done(); ctrl.abort(outer.reason); }
+      else outer.addEventListener("abort", () => { done(); ctrl.abort(outer.reason); }, { once: true });
+    }
+    const signal = ctrl.signal;
+    try {
+      let current = raw;
+      for (let hop = 0; hop <= maxRedirects; hop++) {
+        await assertSafeUrl(current, resolve);
+        if (signal.aborted) throw new Error("aborted before request");
+        const res = (await undiciFetch(current, { ...(rest as any), redirect: "manual", signal, dispatcher })) as unknown as Response;
+        if (res.status >= 300 && res.status < 400) {
+          const loc = res.headers.get("location");
+          if (!loc) { done(); return res; }
+          if (hop === maxRedirects) throw new SsrfBlocked("слишком много редиректов");
+          current = new URL(loc, current).toString();
+          continue;
+        }
+        return boundedBody(res, done);
+      }
+      throw new SsrfBlocked("слишком много редиректов");
+    } catch (e: any) {
+      done();
+      // undici заворачивает ошибку соединения в TypeError("fetch failed") с cause — отказ стража при соединении
+      // (rebinding) должен дойти до вызывающего как SsrfBlocked, а не как «сбой сети».
+      if (e?.cause instanceof SsrfBlocked) throw e.cause;
+      throw e;
+    }
+  };
+}
+
+/** Экземпляр по умолчанию: системный DNS, свой агент. */
+export const safeFetch: SafeFetch = createSafeFetch();
 
 // Ответ, чьё тело при дочитывании снимает таймер. Без тела (204/HEAD) или без потока (моки) — таймер
 // остаётся до срабатывания или до отмены снаружи.

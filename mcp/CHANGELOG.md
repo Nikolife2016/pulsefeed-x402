@@ -22,6 +22,19 @@ reached end of life is treated as minor and is stated here.
   verdict "safe to consider paying"; a v2 body with v1 fields, version 999, a missing timeout or `1e21` as the
   amount were accepted too. The answer carries `x402Version` and the number of valid `offers`; a 402 whose body
   is not JSON or never finishes says so in `error`. Conformance fixtures: `pulsefeed.dev/fixtures/x402`.
+- The challenge parser mirrors `PaymentRequiredSchema` of `@x402/core` 2.26 and is checked against it in the
+  acceptance test on 40+ bodies: v2 keeps `resource` at the top level (not inside the offer) and needs a
+  CAIP-2 network; v1 needs `description`; a challenge with one invalid offer is invalid as a whole. Two
+  PulseFeed rules go beyond the schema and are stated as such: the amount must be a decimal-digit string, and
+  on EVM networks `payTo` must be a 0x-prefixed 40-hex address.
+- x402 v2 challenges carried in the `PAYMENT-REQUIRED` header (base64 JSON, possibly empty body) are read;
+  the answer says where the challenge came from (`challengeSource`) and reports a header that is not base64
+  JSON. Before, a header-only v2 response was "402 body is not JSON".
+- DNS rebinding closed: the address check now runs inside the connection's own name lookup (an `undici`
+  agent with a guarded `lookup`), so the addresses that were checked are the only ones the socket can connect
+  to. Before, the guard resolved the name once and `fetch` resolved it again, so a name that answered a public
+  address first and 127.0.0.1 second reached the loopback. The test simulates exactly that against a local
+  TCP trap and asserts zero connections.
 - SSRF guard: an embedded IPv4 address is checked in every IPv6 form — IPv4-mapped in hex (`::ffff:7f00:1`),
   IPv4-compatible, NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) — plus multicast and Teredo. Before,
   `http://[::ffff:127.0.0.1]/` and `[::ffff:169.254.169.254]` passed the guard (only the dotted form was
