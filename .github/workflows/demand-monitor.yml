@@ -69,7 +69,9 @@ jobs:
             const seenTx = new Set(seen.txs || []);
 
             // ── A. Платящие сигналы
-            const f = await j(`https://pulsefeed.dev/_demand?key=${process.env.DEMAND_KEY}&days=14`);
+            // Ключ — ЗАГОЛОВКОМ, не в строке запроса: 23.09.2026 нашли его в четырёх ротированных
+            // журналах Caddy (query-строка пишется в access-log целиком). Сервер принимает x-demand-key.
+            const f = await j("https://pulsefeed.dev/_demand?days=14", { headers: { "x-demand-key": process.env.DEMAND_KEY } });
             if (f) {
               const pw = f.paywall || {};
               out.total = f.total; out.paid = f.paid;
@@ -93,7 +95,14 @@ jobs:
               // платного роута ($0.004 за /trust → 0.002 USDC): ровно 0.001 USDC пришло 21.09.2026 от
               // 0x6777E11f… без единой записи о расчёте на сервере и было объявлено «новым платежом».
               // В июле три таких «прихода» по 0.000012 USDC пришли с адреса-двойника нашего кошелька.
-              const real = ext.filter(i => Number(i.total?.value || 0) / 1e6 >= 0.002);
+              // ⛔ Контракт токена проверяется ПЕРВЫМ. 23.09.2026 на нашем адресе нашёлся «перевод»
+              // 12.003733 UႽDC (грузинская буква вместо S) от контракта 0xf141d2ce… — чужой контракт
+              // печатает событие с нашим адресом. Без этой проверки монитор объявил бы такой перевод
+              // внешним платежом в USDC и соврал бы в заголовке issue.
+              const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+              const usdcOnly = ext.filter(i => String(i.token?.address_hash || i.token?.address || "").toLowerCase() === USDC);
+              out.transfersExternalFakeToken = ext.length - usdcOnly.length;
+              const real = usdcOnly.filter(i => Number(i.total?.value || 0) / 1e6 >= 0.002);
               out.transfersExternalReal = real.length;
               const fresh = real.filter(i => !seenTx.has(i.transaction_hash || i.tx_hash || i.hash));
               if (fresh.length) {
