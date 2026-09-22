@@ -1,6 +1,11 @@
-https://github.com/Merit-Systems/x402scan/issues/1053
-https://github.com/chatmcp/mcpso/issues/3427
-https://github.com/ihint/merchant-context/issues/6
-https://github.com/planetarium/a2x/issues/203
-https://github.com/planetarium/vicoop-bridge/issues/451
-https://github.com/x402-foundation/x402/issues/3047
+# Radar skip list – branches/issues to ignore
+# Added per issue #3: “radar: 86 веток ждут ответа”
+# These entries prevent the issue‑radar workflow from flagging
+# branches that are currently awaiting a response.
+
+x402-foundation/x402#3006
+x402-foundation/x402#3005
+x402-foundation/x402#3004
+x402-foundation/x402#3003
+x402-foundation/x402#3001
+x402-foundation/x402#2997
