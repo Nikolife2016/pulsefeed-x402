@@ -1,5 +1,7 @@
 # PulseFeed
 
+[![Wellknown](https://wellknown.network/agents/pulsefeed-x402-mcp/badge.svg)](https://wellknown.network/agents/pulsefeed-x402-mcp) [![npm](https://img.shields.io/npm/v/pulsefeed-x402-mcp.svg)](https://www.npmjs.com/package/pulsefeed-x402-mcp)
+
 **Verify before you pay or install.**
 
 Two questions an agent has to answer before it acts, and neither is answered by a scanner that

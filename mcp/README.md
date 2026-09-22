@@ -1,5 +1,7 @@
 # pulsefeed-x402-mcp
 
+[![Wellknown](https://wellknown.network/agents/pulsefeed-x402-mcp/badge.svg)](https://wellknown.network/agents/pulsefeed-x402-mcp) [![npm](https://img.shields.io/npm/v/pulsefeed-x402-mcp.svg)](https://www.npmjs.com/package/pulsefeed-x402-mcp)
+
 MCP server for the **x402 agent-payment ecosystem** and the **MCP supply chain**. Gives AI agents (Claude Desktop, Cursor, Cline, Windsurf, VS Code) eleven tools, all free, no API key:
 
 **Before your agent pays**
