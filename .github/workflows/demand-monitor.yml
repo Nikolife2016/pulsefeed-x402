@@ -89,10 +89,11 @@ jobs:
               const inbound = tx.items.filter(i => (i.to?.hash || "").toLowerCase() === LEDGER);
               const ext = inbound.filter(i => (i.from?.hash || "").toLowerCase() !== HOT);
               out.transfersIn = inbound.length; out.transfersExternal = ext.length;
-              // Пылевые переводы — отравление адреса, а не платёж. Порог 0.001 USDC отсекает
-              // их: реальный вызов стоит от цента. В июле три таких «прихода» по 0.000012 USDC
-              // пришли с адреса-двойника нашего кошелька.
-              const real = ext.filter(i => Number(i.total?.value || 0) / 1e6 >= 0.001);
+              // Пылевые переводы — отравление адреса, а не платёж. Порог — половина самого дешёвого
+              // платного роута ($0.004 за /trust → 0.002 USDC): ровно 0.001 USDC пришло 21.09.2026 от
+              // 0x6777E11f… без единой записи о расчёте на сервере и было объявлено «новым платежом».
+              // В июле три таких «прихода» по 0.000012 USDC пришли с адреса-двойника нашего кошелька.
+              const real = ext.filter(i => Number(i.total?.value || 0) / 1e6 >= 0.002);
               out.transfersExternalReal = real.length;
               const fresh = real.filter(i => !seenTx.has(i.transaction_hash || i.tx_hash || i.hash));
               if (fresh.length) {
