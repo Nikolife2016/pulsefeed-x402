@@ -33,6 +33,11 @@ jobs:
       # шесть сознательно отброшенных веток продолжали числиться ждущими ответа.
       - uses: actions/checkout@v4
 
+      # Правила отсева рассылок живут в отдельном модуле с тестами. Сломались правила — выпуска нет:
+      # лучше пропустить день, чем принести рассылки или срезать живые ветки.
+      - name: Test campaign rules
+        run: node --test .github/scripts/radar-campaigns.test.cjs
+
       - name: Find questions we can actually answer
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,7 +50,7 @@ jobs:
           # аудитория, для которой мы что-то значим.
           gh api -X GET search/issues \
             -f q="repo:x402-foundation/x402 is:issue is:open created:>$SINCE" \
-            -f sort=created -f order=desc -f per_page=100 --jq '.items[] | {n:.number, r:"x402-foundation/x402", t:.title, u:.html_url, b:(.body // "")}' > /tmp/raw.jsonl || true
+            -f sort=created -f order=desc -f per_page=100 --jq '.items[] | {n:.number, r:"x402-foundation/x402", t:.title, u:.html_url, a:(.user.login // ""), b:(.body // "")}' > /tmp/raw.jsonl || true
 
           # Широкий поиск по признакам вопроса, а не по слову «x402».
           for Q in \
@@ -61,7 +66,7 @@ jobs:
             for PAGE in 1 2 3; do
               gh api -X GET search/issues -f q="$Q created:>$SINCE" -f sort=created -f order=desc \
                 -f per_page=100 -f page="$PAGE" \
-                --jq '.items[] | {n:.number, r:(.repository_url|split("/")|.[-2:]|join("/")), t:.title, u:.html_url, b:(.body // "")}' >> /tmp/raw.jsonl || true
+                --jq '.items[] | {n:.number, r:(.repository_url|split("/")|.[-2:]|join("/")), t:.title, u:.html_url, a:(.user.login // ""), b:(.body // "")}' >> /tmp/raw.jsonl || true
             done
           done
 
@@ -107,6 +112,8 @@ jobs:
 
           node -e '
             const fs = require("fs");
+            const { findCampaigns, parseHistory } = require(process.cwd() + "/.github/scripts/radar-campaigns.cjs");
+            const rawAll = [];     // вся выдача поиска: разброс автора виден и по веткам без хоста
             const seen = fs.existsSync("/tmp/seen.txt") ? fs.readFileSync("/tmp/seen.txt","utf8") : "";
             // Если история трекера прочиталась НЕ ЦЕЛИКОМ (сеть, права, обрезка выдачи),
             // отсев ослабнет и радар принесёт заново то, что уже приносил.
@@ -174,6 +181,7 @@ jobs:
             for (const line of fs.readFileSync("/tmp/raw.jsonl","utf8").split("\n")) {
               if (!line.trim()) continue;
               let o; try { o = JSON.parse(line); } catch { continue; }
+              rawAll.push({ url: o.u, repo: o.r, author: o.a || "" });
               if (NOISE.test(o.r)) continue;
               if (o.r === process.env.GITHUB_REPOSITORY) continue;     // свои не считаем
               // «Уже приносили» — проверка по ГРАНИЦЕ номера, а не подстрокой.
@@ -207,35 +215,23 @@ jobs:
                 const payers = Math.max(...rs.map(x => (x.quality && x.quality.l30DaysUniquePayers) || 0));
                 parts.push(`${h}: ${rs.length} листинг(ов) в Bazaar, оплаченных вызовов за 30 дней ${calls}, уникальных плательщиков ${payers}`);
               }
-              rows.set(o.u, { line: `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}\n  у нас есть данные по названному эндпоинту: ${parts.join("; ")}`,
-                              title: o.t.toLowerCase().replace(/\s+/g, " ").trim(), repo: o.r, url: o.u });
+              // Автор пишется в строку (с 27.09.2026): по нему отсев рассылок видит кампанию,
+              // растянутую на дни, — прошлые выпуски и есть его история.
+              const by = o.a ? ` · @${o.a}` : "";
+              rows.set(o.u, { line: `- **[${o.r}#${o.n}](${o.u})** — ${o.t.replace(/[|\r\n]/g," ").slice(0,110)}${by}\n  у нас есть данные по названному эндпоинту: ${parts.join("; ")}`,
+                              title: o.t, repo: o.r, url: o.u, n: o.n, author: o.a || "", hosts: [...hostsFound] });
             }
 
-            // ═══ Свёртка кампаний (20.08.2026) ═══
-            // В выпуске за 20.08 четыре строки были ОДНИМ текстом «Complement (not a clone):
-            // Nock free /check + $0.05 /report», разосланным по четырём чужим репозиториям.
-            // Это не четыре вопроса, а одна рассылка: автор продвигает свой продукт, и данные
-            // по названному эндпоинту у нас одни и те же. Дедупликация по URL такое не ловит —
-            // URL у всех разные. Сворачиваем по нормализованному заголовку: тот же текст в
-            // трёх и более репозиториях за один прогон — кампания, в выпуск идёт одна строка
-            // с пометкой. Порог 3, а не 2: два одинаковых заголовка бывают честно (форк,
-            // перенос ветки), три разных репозитория с одним текстом — уже рассылка.
+            // ═══ Отсев рассылок (27.09.2026) ═══
+            // Прежняя свёртка (20.08) ловила только дословно одинаковый заголовок и оставляла одну строку
+            // кампании в выпуске. Кампании перефразируют каждую ветку, и за 10–26.09 рассылками оказалось
+            // большинство принесённого. Правила и замеры — в .github/scripts/radar-campaigns.cjs.
+            // Отсечённое не пропадает молча: оно уходит под кат с пометкой ⛔ — владелец его видит, оно
+            // попадает в историю отсева (завтра не всплывёт) и не входит в счётчик «ждут ответа».
+            const cut = [];
             {
-              const byTitle = new Map();
-              for (const v of rows.values()) {
-                if (!byTitle.has(v.title)) byTitle.set(v.title, []);
-                byTitle.get(v.title).push(v);
-              }
-              for (const [t, group] of byTitle) {
-                const repos = new Set(group.map(g => g.repo));
-                if (repos.size >= 3) {
-                  const keep = group[0];
-                  for (const g of group.slice(1)) rows.delete(g.url);
-                  // Адреса свёрнутых веток кладём в саму пометку: выпуск — источник seen,
-                  // и без этого завтра те же ветки всплыли бы снова и капали по одной.
-                  keep.line += `\n  ⚠️ тот же текст ещё в ${repos.size - 1} репозиториях — похоже на рассылку, не на ${repos.size} вопросов: ${group.slice(1).map(g => g.url).join(" · ")}`;
-                }
-              }
+              const camp = findCampaigns({ rows: [...rows.values()], raw: rawAll, history: parseHistory(seen, Date.now()) });
+              for (const [u, c] of camp) { const v = rows.get(u); rows.delete(u); cut.push({ ...v, c }); }
             }
             // Кап в 12 строк держит комментарий читаемым, но раньше остаток пропадал
             // молча: он не публикуется, значит и в историю отсева не попадает, а завтра
@@ -245,6 +241,19 @@ jobs:
               const head = all.slice(0, 12);
               if (all.length > head.length)
                 head.push("\n_Ещё " + (all.length - head.length) + " веток подошли, но не поместились в выпуск — придут завтра._");
+              if (cut.length) {
+                if (!all.length) head.push("_Веток по делу сегодня нет._");
+                const inRepos = n => (n % 10 === 1 && n % 100 !== 11) ? `${n} репозитории` : `${n} репозиториях`;
+                const why = { author: "автор в", host: "хост в", title: "заголовок в" };
+                const groups = new Map();
+                for (const x of cut) groups.set(x.c.key, (groups.get(x.c.key) || 0) + 1);
+                const summary = [...groups].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ×${n}`).join(", ");
+                head.push(`\n_⛔ Отсечено как рассылки: ${cut.length} — ${summary}._`);
+                head.push("<details><summary>отсечённые ветки</summary>\n");
+                for (const x of cut)
+                  head.push(`- ⛔ [${x.repo}#${x.n}](${x.url})${x.author ? " · @" + x.author : ""}${x.hosts.length ? " · хост " + x.hosts.join(", ") : ""} — ${why[x.c.kind]} ${inRepos(x.c.repos)}`);
+                head.push("\n</details>");
+              }
               fs.writeFileSync("/tmp/found.md", head.join("\n"));
             }
             // Радар только НАХОДИТ ветки. Пост он не делает.
@@ -254,7 +263,7 @@ jobs:
           NOTHING_NEW=0
           [ -s /tmp/found.md ] || { echo "новых кандидатов нет"; NOTHING_NEW=1; }
 
-          BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Ветка попадает сюда, только если называет эндпоинт из каталога Bazaar, по которому у нас есть наблюдения. Доводов по ключевым словам больше нет: их проверили на 123 ветках — 88 срабатываний, применимы 4. Ответ пишется вручную и от лица владельца; посты радар не делает._\n' \
+          BODY=$(printf 'Свежие вопросы, где у нас есть конкретный ответ — %s UTC\n\n%s\n\n_Ветка попадает сюда, только если называет эндпоинт из каталога Bazaar, по которому у нас есть наблюдения. Доводов по ключевым словам больше нет: их проверили на 123 ветках — 88 срабатываний, применимы 4. Рассылки — один автор или один хост в трёх и более чужих репозиториях за две недели — отсекаются и уходят под кат. Ответ пишется вручную и от лица владельца; посты радар не делает._\n' \
             "$(date -u +%F)" "$(cat /tmp/found.md)")
 
           if [ -n "$TRACKER" ] && [ "$NOTHING_NEW" = "0" ]; then
@@ -287,6 +296,7 @@ jobs:
             gh api --paginate "repos/$REPO/issues/$TRACKER/comments" \
               --jq "[.[] | select(.created_at > \"$SINCE\")] | .[].body";
             cat /tmp/found.md 2>/dev/null; } \
+            | { grep -vE '⛔|⚠️ тот же текст' || true; } \
             | grep -oE 'https://github\.com/[^/]+/[^/]+/issues/[0-9]+' | sort -u > /tmp/all-urls.txt
           while read -r U; do
             [ -z "$U" ] && continue
