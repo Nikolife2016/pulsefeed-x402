@@ -267,7 +267,16 @@ jobs:
             "$(date -u +%F)" "$(cat /tmp/found.md)")
 
           if [ -n "$TRACKER" ] && [ "$NOTHING_NEW" = "0" ]; then
-            gh issue comment -R "$REPO" "$TRACKER" --body "$BODY"
+            # 02.10.2026: трекер закрыт от посторонних (30.09 продавцы оставили в нём шесть реклам),
+            # а встроенный токен Actions в закрытый issue писать не может: 01.10 выпуск упал на
+            # «Unable to create comment because issue is locked». Замок снимается на время одной
+            # записи и ставится обратно при любом исходе записи.
+            WAS_LOCKED=$(gh api "repos/$REPO/issues/$TRACKER" --jq '.locked' 2>/dev/null || echo false)
+            if [ "$WAS_LOCKED" = "true" ]; then gh issue unlock -R "$REPO" "$TRACKER"; fi
+            POSTED=0
+            gh issue comment -R "$REPO" "$TRACKER" --body "$BODY" || POSTED=$?
+            if [ "$WAS_LOCKED" = "true" ]; then gh issue lock -R "$REPO" "$TRACKER" --reason spam || echo "::warning::трекер не удалось закрыть обратно"; fi
+            [ "$POSTED" = "0" ] || exit "$POSTED"
             gh issue reopen -R "$REPO" "$TRACKER" 2>/dev/null || true
           elif [ -z "$TRACKER" ] && [ "$NOTHING_NEW" = "0" ]; then
             gh label create -R "$REPO" radar --color 0E8A16 --description "Threads where our data answers the question" 2>/dev/null || true
