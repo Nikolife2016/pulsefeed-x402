@@ -3350,3 +3350,11 @@
 {"ts":"2026-10-04T19:48:28.446Z","date":"2026-10-04","group":"control","path":"trust/history","present":false,"calls30d":null,"lastCalledAt":null}
 {"ts":"2026-10-04T19:48:28.446Z","date":"2026-10-04","group":"control","path":"trust/dataset","present":false,"calls30d":null,"lastCalledAt":null}
 {"ts":"2026-10-04T19:48:28.446Z","date":"2026-10-04","group":"control","path":"data/full","present":false,"calls30d":null,"lastCalledAt":null}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"test","path":"pulse","present":false,"calls30d":null,"lastCalledAt":null}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"test","path":"whales","present":false,"calls30d":null,"lastCalledAt":null}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"test","path":"flow","present":false,"calls30d":null,"lastCalledAt":null}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"test","path":"momentum","present":false,"calls30d":null,"lastCalledAt":null}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"control","path":"trust","present":true,"calls30d":1,"lastCalledAt":"2026-10-02T17:11:14.753Z"}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"control","path":"trust/history","present":false,"calls30d":null,"lastCalledAt":null}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"control","path":"trust/dataset","present":false,"calls30d":null,"lastCalledAt":null}
+{"ts":"2026-10-04T23:35:30.737Z","date":"2026-10-04","group":"control","path":"data/full","present":false,"calls30d":null,"lastCalledAt":null}
