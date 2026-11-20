@@ -1,6 +1,6 @@
 # PulseFeed
 
-[![Wellknown](https://wellknown.network/agents/pulsefeed-x402-mcp/badge.svg)](https://wellknown.network/agents/pulsefeed-x402-mcp) [![npm](https://img.shields.io/npm/v/pulsefeed-x402-mcp.svg)](https://www.npmjs.com/package/pulsefeed-x402-mcp)
+[![Wellknown](https://wellknown.network/agents/pulsefeed-x402-mcp/badge.svg)](https://wellknown.network/agents/pulsefeed-x402-mcp) [![npm](https://img.shields.io/npm/v/pulsefeed-x402-mcp.svg)](https://www.npmjs.com/package/pulsefeed-x402-mcp) [![PulseFeed on StartupScores](https://startupscores.com/badge/pulsefeed.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/pulsefeed)
 
 **Verify before you pay or install.**
 
