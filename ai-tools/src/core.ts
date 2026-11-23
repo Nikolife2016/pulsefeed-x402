@@ -122,5 +122,5 @@ export const TOOL_DESCRIPTIONS = {
   verify:
     "Check whether an x402 payment endpoint is SAFE TO PAY before paying it. Many listed x402 endpoints are dead, invalid or scams (live share at pulsefeed.dev/status.json). Returns a pay/avoid verdict with liveness, trust score, scam/anomaly flags, on-chain receiver profile and uptime. If the result has checkFailed: true, no verdict was produced — do not pay on that basis. Call this before sending any x402 payment to an unknown URL.",
   catalog:
-    "List working (live, verified) x402 services and the ecosystem risk map from PulseFeed. Use when the agent needs to discover an x402 service that is safe to pay, or wants an overview of the x402 ecosystem's health.",
-} as const;
+    "List working (live, verified) x402 services and the ecosystem risk map from PulseFeed. Use this to discover reliable x402 endpoints and check overall ecosystem health.",
+};
