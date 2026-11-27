@@ -2598,3 +2598,7 @@
 {"ts":"2026-11-27T03:15:41.979Z","date":"2026-11-27","url":"https://402.com.tr/api/x402/paymaster-check","present":false}
 {"ts":"2026-11-27T03:15:41.979Z","date":"2026-11-27","url":"https://402.com.tr/api/x402/morpho-health","present":false}
 {"ts":"2026-11-27T03:15:41.979Z","date":"2026-11-27","url":"https://402.com.tr/api/x402/gas-payer","present":false}
+{"ts":"2026-11-27T14:18:53.683Z","date":"2026-11-27","url":"https://402.com.tr/api/x402/safe-check","present":false}
+{"ts":"2026-11-27T14:18:53.683Z","date":"2026-11-27","url":"https://402.com.tr/api/x402/paymaster-check","present":false}
+{"ts":"2026-11-27T14:18:53.683Z","date":"2026-11-27","url":"https://402.com.tr/api/x402/morpho-health","present":true,"descLen":490,"calls30d":1,"payers30d":1,"lastCalledAt":"2026-11-27T07:45:53.515Z"}
+{"ts":"2026-11-27T14:18:53.683Z","date":"2026-11-27","url":"https://402.com.tr/api/x402/gas-payer","present":false}
